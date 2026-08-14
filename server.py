@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from installed_client_inspector import inspect as inspect_client, core_inspection_script
 
-PORT=8099; VERSION='0.9.2'; HA_CONFIG=Path('/homeassistant'); SHARE=Path('/share'); SUPERVISOR='http://supervisor'
+PORT=8099; VERSION='0.9.8'; HA_CONFIG=Path('/homeassistant'); SHARE=Path('/share'); SUPERVISOR='http://supervisor'
 SENSITIVE=re.compile(r'(token|password|secret|username|access_token|refresh_token|authorization|cookie)',re.I)
 LOG_RE=re.compile(r'ecovacs|deebot|beepbop|LPATPGFR|cqyi87|CARTESIAN|y30|please update|unsupported|exception|traceback|auth|discover|error|deebot[-_ ]?client',re.I)
 
@@ -79,8 +79,7 @@ def integration():
     out['core_visible']=Path(out['core_path']).exists(); return out
 
 def snapshot():
-    l=logs()
-    return {'timestamp':now(),'config_entries':config_entries(),'devices':registry('core.device_registry','devices'),'entities':registry('core.entity_registry','entities'),'states':states(),'logs':l,'error_log':error_log(),'client_inspection':inspect_client('\n'.join(l['matching_lines']))}
+    l=logs(); return {'timestamp':now(),'config_entries':config_entries(),'devices':registry('core.device_registry','devices'),'entities':registry('core.entity_registry','entities'),'states':states(),'logs':l,'error_log':error_log(),'client_inspection':inspect_client('\n'.join(l['matching_lines']))}
 
 def reload_ecovacs():
     entries=config_entries().get('entries',[]); targets=[e for e in entries if e.get('domain')=='ecovacs']
@@ -93,22 +92,19 @@ def diagnostic():
 
 def deep_capture():
     started=now(); before=snapshot(); enabled=set_debug(True); time.sleep(2); reload_result=reload_ecovacs(); time.sleep(5); captured=logs(10000); err=error_log(); disabled=set_debug(False); after=snapshot()
-    # Include the Core-side script in the bundle so the next capture can inspect the actual site-packages.
     return {'started_at':started,'debug_enabled':safe('',enabled),'reload':reload_result,'capture':{'logs':captured,'error_log':err},'debug_restored':safe('',disabled),'final_state':after,'core_inspection_script':core_inspection_script()}
 
 def make_bundle(obj):
     stamp=datetime.now().strftime('%Y%m%d-%H%M%S'); out=SHARE/f'deebot-y1pro-deep-diagnostic-{stamp}.zip'
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
-        z.writestr('diagnostic.json',json.dumps(obj,indent=2,default=str))
-        z.writestr('core-inspection.sh',obj.get('capture',{}).get('core_inspection_script',core_inspection_script()))
-        z.writestr('README.txt',f'DEEBOT Y1 PRO diagnostics v{VERSION}. Sensitive values are redacted.\n')
+        z.writestr('diagnostic.json',json.dumps(obj,indent=2,default=str)); z.writestr('core-inspection.sh',obj.get('capture',{}).get('core_inspection_script',core_inspection_script())); z.writestr('README.txt',f'DEEBOT Y1 PRO diagnostics v{VERSION}. Sensitive values are redacted.\n')
     return out
 
-HTML='''<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>DEEBOT Diagnostics</title><style>body{font-family:system-ui;max-width:1000px;margin:25px auto;padding:0 18px}.btn{padding:11px 15px;margin:4px;border:1px solid #bbb;border-radius:8px;background:#fff;cursor:pointer}.card{border:1px solid #ddd;border-radius:10px;padding:14px;margin:12px 0}pre{white-space:pre-wrap;background:#f5f5f5;padding:14px;border-radius:8px;max-height:600px;overflow:auto}.warn{padding:12px;background:#fff7e6;border-radius:8px;margin:12px 0}</style></head><body><h1>DEEBOT Y1 PRO Diagnostics</h1><p>Version <b>0.9.2</b></p><div class="warn"><b>Deep Y1 PRO Capture</b><br>One button: enables temporary debug logging, reloads Ecovacs, captures discovery/protocol errors, restores logging, creates a ZIP and downloads it automatically.</div><button class="btn" onclick="deep()">Run Deep Capture + Download ZIP</button><button class="btn" onclick="run()">Run Normal Diagnostic</button><button class="btn" onclick="core()">Show Core Inspection Script</button><div id="status" class="card">Ready.</div><div id="out"></div><script>const $=x=>document.getElementById(x);function render(d){$('out').innerHTML='<div class="card"><pre>'+JSON.stringify(d,null,2)+'</pre></div>'}async function deep(){if(!confirm('Run the complete Y1 PRO capture? The Ecovacs integration will be reloaded once.'))return;$('status').textContent='Capturing. Do not close this page…';try{let r=await fetch('api/deep',{method:'POST'});let d=await r.json();render(d);if(d.download_url)window.location.href=d.download_url;$('status').textContent=r.ok?'Capture complete — ZIP download started.':'Capture failed.'}catch(e){$('status').textContent='Capture failed: '+e}}async function run(){ $('status').textContent='Running…';let r=await fetch('api/diagnostic');render(await r.json());$('status').textContent='Complete.'}async function core(){let r=await fetch('api/core-inspection-script');let t=await r.text();$('out').innerHTML='<div class="card"><button class="btn" onclick="navigator.clipboard.writeText(document.getElementById(\'cmd\').textContent)">Copy</button><pre id="cmd"></pre></div>';$('cmd').textContent=t;$('status').textContent='Core script ready.'}</script></body></html>'''
+HTML='''<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>DEEBOT Diagnostics</title><style>body{font-family:system-ui;max-width:1000px;margin:25px auto;padding:0 18px}.btn{padding:11px 15px;margin:4px;border:1px solid #bbb;border-radius:8px;background:#fff;cursor:pointer}.card{border:1px solid #ddd;border-radius:10px;padding:14px;margin:12px 0}pre{white-space:pre-wrap;background:#f5f5f5;padding:14px;border-radius:8px;max-height:600px;overflow:auto}.warn{padding:12px;background:#fff7e6;border-radius:8px;margin:12px 0}</style></head><body><h1>DEEBOT Y1 PRO Diagnostics</h1><p>Version <b>0.9.8</b></p><div class="warn"><b>Deep Y1 PRO Capture</b><br>Enables temporary debug logging, reloads Ecovacs, captures discovery/protocol errors, restores logging, creates a ZIP and downloads it automatically.</div><form action="api/deep" method="post"><button class="btn" type="submit">Run Deep Capture + Download ZIP</button></form><div class="card"><a href="api/diagnostic">Run Normal Diagnostic</a></div><div class="card"><a href="api/core-inspection-script">Show Core Inspection Script</a></div></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
     def send(self,c,b,ctype='application/json',disp=None):
-        b=b.encode() if isinstance(b,str) else b; self.send_response(c); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store');
+        b=b.encode() if isinstance(b,str) else b; self.send_response(c); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store')
         if disp:self.send_header('Content-Disposition',disp)
         self.end_headers(); self.wfile.write(b)
     def do_GET(self):
@@ -122,7 +118,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith('/api/deep'):
             try:
-                d=diagnostic(); cap=deep_capture(); d['capture']=cap; out=make_bundle(d); return self.send(200,json.dumps({'ok':True,'version':VERSION,'download_url':'api/download/'+out.name,'file':out.name,'summary':{'log_matches':cap['capture']['logs']['match_count'],'device_count':len(cap['final_state']['devices']),'entity_count':len(cap['final_state']['entities'])}},indent=2))
+                d=diagnostic(); cap=deep_capture(); d['capture']=cap; out=make_bundle(d)
+                return self.send(200,out.read_bytes(),'application/zip',f'attachment; filename="{out.name}"')
             except Exception as e:return self.send(500,json.dumps({'ok':False,'error':str(e)}))
         return self.send(404,json.dumps({'error':'not found'}))
     def log_message(self,*_): pass
