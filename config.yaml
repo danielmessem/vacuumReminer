@@ -16,6 +16,8 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:robot-vacuum
 panel_title: DEEBOT Diagnostics
+homeassistant_api: true
+hassio_api: true
 map:
   - config:ro
   - share:rw
