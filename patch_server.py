@@ -1,26 +1,48 @@
 from pathlib import Path
+import re
 
 p = Path('/app/server.py')
 s = p.read_text()
-# Keep the runtime version synchronized with the add-on version.
-s = s.replace("VERSION='0.9.1'", "VERSION='0.9.4'")
-s = s.replace("VERSION='0.9.2'", "VERSION='0.9.4'")
-s = s.replace("VERSION='0.9.3'", "VERSION='0.9.4'")
-s = s.replace('Version <b>0.9.1</b>.', 'Version <b>0.9.4</b>.')
-s = s.replace('Version <b>0.9.2</b>', 'Version <b>0.9.4</b>')
-s = s.replace('Version <b>0.9.3</b>', 'Version <b>0.9.4</b>')
 
-# Replace the JavaScript/fetch action with a plain browser navigation. This
-# works reliably through Home Assistant ingress and does not depend on JS.
-old = "async function deep(){if(!confirm('Enable temporary Ecovacs debug logging, reload the integration and capture the result?'))return;$('status').textContent='Running deep capture. Do not close this page…';let r=await fetch('api/deep',{method:'POST'});let d=await r.json();render(d);$('status').textContent=r.ok?'Deep capture complete.':'Deep capture failed.'}"
-new = "function deep(){if(!confirm('Enable temporary Ecovacs debug logging, reload the integration and capture the result?'))return;$('status').textContent='Starting deep capture…';window.location.href='api/deep-download'}"
-s = s.replace(old, new)
+# Keep runtime version synchronized with the manifest.
+s = re.sub(r"VERSION='[^']+'", "VERSION='0.9.5'", s, count=1)
+s = re.sub(r'Version <b>0\.9\.[0-9]+</b>', 'Version <b>0.9.5</b>', s)
 
-# The previous patch incorrectly added /api/deep-download to do_POST while
-# the browser uses GET navigation. Add the download endpoint to do_GET.
-marker = "        if self.path.startswith('/api/diagnostic'):\n"
-route = "        if self.path.startswith('/api/deep-download'):\n            try:\n                capture=deep_capture(); o=bundle(diagnostic(capture)); return self.send(200,o.read_bytes(),'application/zip',f'attachment; filename=\"{o.name}\"')\n            except Exception as e:return self.send(500,json.dumps({'error':str(e)}))\n"
-if route not in s:
-    s = s.replace(marker, route + marker, 1)
+# Plain browser navigation is more reliable through Home Assistant ingress.
+s = re.sub(
+    r"async function deep\(\)\{.*?\}",
+    "function deep(){if(!confirm('Run the complete Y1 PRO capture? The Ecovacs integration will be reloaded once.'))return;document.getElementById('status').textContent='Starting deep capture. The download will begin when complete…';window.location.assign('api/deep-download')}",
+    s,
+    count=1,
+    flags=re.S,
+)
+
+# Replace the server's GET handler with a single, known-good implementation.
+start = s.find('    def do_GET(self):')
+post = s.find('    def do_POST(self):')
+if start != -1 and post != -1 and post > start:
+    get_handler = '''    def do_GET(self):
+        if self.path in ('','/'):
+            return self.send(200,HTML,'text/html; charset=utf-8')
+        if self.path.startswith('/api/deep-download'):
+            try:
+                obj = diagnostic()
+                obj['capture'] = deep_capture()
+                out = make_bundle(obj)
+                return self.send(200,out.read_bytes(),'application/zip',f'attachment; filename="{out.name}"')
+            except Exception as e:
+                return self.send(500,json.dumps({'ok':False,'error':str(e)}))
+        if self.path.startswith('/api/diagnostic'):
+            return self.send(200,json.dumps(diagnostic(),indent=2,default=str))
+        if self.path.startswith('/api/core-inspection-script'):
+            return self.send(200,core_inspection_script(),'text/plain; charset=utf-8')
+        if self.path.startswith('/api/download/'):
+            p=SHARE/self.path.split('/api/download/',1)[1]
+            if p.exists() and p.is_file():
+                return self.send(200,p.read_bytes(),'application/zip',f'attachment; filename="{p.name}"')
+        return self.send(404,json.dumps({'error':'not found'}))
+
+'''
+    s = s[:start] + get_handler + s[post:]
 
 p.write_text(s)
