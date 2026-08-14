@@ -1,42 +1,28 @@
 #!/usr/bin/env python3
-"""Best-effort DEEBOT client inspection.
-
-An HA add-on runs in its own container, so it cannot directly read the Python
-site-packages filesystem of the Home Assistant Core container. This module
-therefore fingerprints everything that is legitimately visible and explicitly
-reports that limitation rather than pretending the add-on inspected Core.
-"""
-import importlib.util, json, os, re, subprocess, sys
+"""Best-effort DEEBOT client inspection plus a safe Core-side inspection script."""
+import importlib.metadata as md
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 TARGETS = ["deebot_client", "deebot-client", "ecovacs"]
 PATTERNS = ["cqyi87", "Device class", "SUPPORTED_MODELS", "hardware", "cd45", "30000"]
 
 
-def run(cmd):
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-        return {"returncode": p.returncode, "stdout": p.stdout[:100000], "stderr": p.stderr[:20000]}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 def package_info():
     out = {"python": sys.version, "packages_visible_to_addon": {}}
-    try:
-        import importlib.metadata as md
-        for name in TARGETS:
-            try:
-                d = md.distribution(name)
-                out["packages_visible_to_addon"][name] = {
-                    "version": d.version,
-                    "location": str(d.locate_file("")),
-                    "files": [str(x) for x in (d.files or []) if "deebot" in str(x).lower() or "ecovacs" in str(x).lower()][:500],
-                }
-            except Exception as e:
-                out["packages_visible_to_addon"][name] = {"installed": False, "error": str(e)}
-    except Exception as e:
-        out["metadata_error"] = str(e)
+    for name in TARGETS:
+        try:
+            d = md.distribution(name)
+            out["packages_visible_to_addon"][name] = {
+                "version": d.version,
+                "location": str(d.locate_file("")),
+                "files": [str(x) for x in (d.files or []) if "deebot" in str(x).lower() or "ecovacs" in str(x).lower()][:500],
+            }
+        except Exception as e:
+            out["packages_visible_to_addon"][name] = {"installed": False, "error": str(e)}
     return out
 
 
@@ -52,8 +38,9 @@ def local_source_search():
                     break
                 try:
                     text = p.read_text(errors="replace")
-                    if any(re.search(re.escape(x), text, re.I) for x in PATTERNS):
-                        hits.append({"path": str(p), "matches": {x: bool(re.search(re.escape(x), text, re.I)) for x in PATTERNS}})
+                    matched = [x for x in PATTERNS if re.search(re.escape(x), text, re.I)]
+                    if matched:
+                        hits.append({"path": str(p), "matches": matched})
                 except Exception:
                     pass
         except Exception:
@@ -62,21 +49,87 @@ def local_source_search():
 
 
 def installed_client_fingerprint(core_logs=""):
-    """Extract evidence about the *Core* client from logs without claiming filesystem access."""
     text = core_logs or ""
-    evidence = []
-    for line in text.splitlines():
-        if re.search(r"deebot|ecovacs|cqyi87|device class|deebot-client|version", line, re.I):
-            evidence.append(line[-2000:])
+    evidence = [line[-2000:] for line in text.splitlines() if re.search(r"deebot|ecovacs|cqyi87|device class|deebot-client|version", line, re.I)]
     versions = sorted(set(re.findall(r"deebot[-_ ]?client[^0-9]{0,20}([0-9]+(?:\.[0-9]+)+)", text, re.I)))
     return {
         "core_filesystem_direct_access": False,
-        "reason": "Home Assistant add-ons run in a separate container; this add-on cannot read Core's /usr/local/lib/python*/site-packages without an explicit host/container mount or Core-side diagnostic endpoint.",
+        "reason": "The diagnostic add-on is a separate container and cannot directly read Home Assistant Core site-packages.",
         "versions_seen_in_core_logs": versions,
         "core_log_evidence": evidence[-1000:],
-        "next_exact_core_command": "python3 -c 'import deebot_client,inspect; print(deebot_client.__file__); print(getattr(deebot_client,\"__version__\",\"unknown\"))'",
-        "next_package_listing_command": "python3 -m pip show deebot-client",
     }
+
+
+# This script is intentionally read-only: it gathers package/source/version information,
+# redacts obvious credentials, and writes one JSON result. It does not install packages,
+# modify HA, restart services, or execute anything fetched from the network.
+CORE_INSPECTION_SCRIPT = r'''#!/usr/bin/env bash
+set -u
+OUT="/config/deebot-y1pro-core-inspection-$(date +%Y%m%d-%H%M%S).json"
+TMP="${OUT}.tmp"
+python3 - <<'PY' > "$TMP"
+import json, os, re, sys, subprocess, pathlib, importlib.util
+from importlib import metadata
+
+patterns = ["cqyi87", "SUPPORTED_MODELS", "cd45", "30000", "Device class", "not recognized"]
+roots = [pathlib.Path('/usr/local/lib'), pathlib.Path('/usr/lib'), pathlib.Path('/usr/src/homeassistant/homeassistant/components/ecovacs')]
+
+def scan():
+    hits=[]
+    for root in roots:
+        if not root.exists(): continue
+        try:
+            for p in root.rglob('*'):
+                if len(hits)>=2000: break
+                if not p.is_file() or p.suffix not in ('.py','.json','.toml','.yaml','.yml'): continue
+                try: text=p.read_text(errors='replace')[:1000000]
+                except Exception: continue
+                m=[x for x in patterns if x.lower() in text.lower()]
+                if m: hits.append({'path':str(p),'matches':m,'size':p.stat().st_size})
+        except Exception: pass
+    return hits
+
+result={'python':sys.version,'homeassistant_version':None,'deebot_client':{},'ecovacs_manifest':{},'source_hits':scan(),'commands':{}}
+try:
+    import homeassistant
+    result['homeassistant_version']=getattr(homeassistant,'__version__','unknown')
+except Exception as e: result['homeassistant_import_error']=str(e)
+try:
+    import deebot_client
+    result['deebot_client']={'module_file':getattr(deebot_client,'__file__',None),'version':getattr(deebot_client,'__version__','unknown')}
+except Exception as e: result['deebot_client']={'import_error':str(e)}
+for name in ('deebot-client','ecovacs'):
+    try:
+        d=metadata.distribution(name)
+        result['deebot_client'].setdefault('distributions',{})[name]={'version':d.version,'location':str(d.locate_file(''))}
+    except Exception: pass
+manifest=pathlib.Path('/usr/src/homeassistant/homeassistant/components/ecovacs/manifest.json')
+if manifest.exists():
+    try: result['ecovacs_manifest']=json.loads(manifest.read_text(errors='replace'))
+    except Exception as e: result['ecovacs_manifest']={'error':str(e)}
+# Focused source excerpts for the exact compatibility problem.
+excerpts=[]
+for item in result['source_hits']:
+    if not any(x in item['matches'] for x in ('cqyi87','SUPPORTED_MODELS','cd45','30000','Device class')): continue
+    p=pathlib.Path(item['path'])
+    try:
+        lines=p.read_text(errors='replace').splitlines()
+        relevant=[]
+        for i,line in enumerate(lines):
+            if any(x.lower() in line.lower() for x in patterns):
+                relevant.extend([(i+1, lines[j][:500]) for j in range(max(0,i-3), min(len(lines),i+4))])
+        excerpts.append({'path':str(p),'lines':relevant[:300]})
+    except Exception: pass
+result['source_excerpts']=excerpts
+print(json.dumps(result,indent=2,default=str))
+PY
+mv "$TMP" "$OUT"
+echo "WROTE:$OUT"
+'''
+
+
+def core_inspection_script():
+    return CORE_INSPECTION_SCRIPT
 
 
 def inspect(core_logs=""):
@@ -84,5 +137,6 @@ def inspect(core_logs=""):
         "package_info_in_diagnostic_container": package_info(),
         "local_source_hits_in_diagnostic_container": local_source_search(),
         "core_runtime": installed_client_fingerprint(core_logs),
-        "important": "Do not treat package_info_in_diagnostic_container as the Home Assistant Core package. The containers are separate.",
+        "core_inspection_script_available": True,
+        "important": "Run the generated read-only script inside Home Assistant Core/Terminal. It writes a JSON file under /config and does not install, modify, restart, or download anything.",
     }
