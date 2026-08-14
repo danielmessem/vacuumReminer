@@ -1,0 +1,25 @@
+name: DEEBOT Y1 PRO Diagnostics
+version: "0.1.0"
+slug: deebot_y1_pro_diagnostics
+description: Diagnostic toolkit for DEEBOT Y1 PRO and Home Assistant DEEBOT integrations
+url: https://github.com/danielmessem/vacuumReminer
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: application
+boot: auto
+init: false
+ports:
+  8099/tcp: null
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:robot-vacuum
+panel_title: DEEBOT Diagnostics
+map:
+  - config:ro
+  - share:rw
+options:
+  log_lines: 500
+schema:
+  log_lines: int
