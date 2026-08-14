@@ -1,5 +1,5 @@
 name: DEEBOT Y1 PRO Diagnostics
-version: "0.1.0"
+version: "0.2.0"
 slug: deebot_y1_pro_diagnostics
 description: Diagnostic toolkit for DEEBOT Y1 PRO and Home Assistant DEEBOT integrations
 url: https://github.com/danielmessem/vacuumReminer
@@ -19,9 +19,9 @@ panel_title: DEEBOT Diagnostics
 homeassistant_api: true
 hassio_api: true
 map:
-  - config:ro
+  - homeassistant_config:ro
   - share:rw
 options:
-  log_lines: 500
+  log_lines: 1000
 schema:
   log_lines: int
