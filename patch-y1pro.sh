@@ -18,14 +18,11 @@ import re
 p = Path('/usr/local/lib/python3.14/site-packages/deebot_client/hardware/cqyi87.py')
 s = p.read_text()
 
-# Remove capabilities that the Y1 Pro has now proven not to support.
-# This parser replaces a keyword's balanced Python expression without
-# relying on fragile multi-line regexes.
 def replace_kw(src, kw, replacement):
-    m = re.search(r'(?m)^\s*' + re.escape(kw) + r'\s*=', src)
+    m = re.search(r'(?m)^(\s*)' + re.escape(kw) + r'\s*=', src)
     if not m:
         return src, False
-    start = m.start() + (len(m.group(0)) - len(m.group(0).lstrip()))
+    start = m.start(1)
     eq = src.find('=', start)
     i = eq + 1
     while i < len(src) and src[i].isspace():
@@ -39,54 +36,47 @@ def replace_kw(src, kw, replacement):
         if quote:
             if triple:
                 if src.startswith(quote * 3, i):
-                    i += 3
-                    quote = None
-                    triple = False
-                    continue
+                    i += 3; quote = None; triple = False; continue
             elif c == '\\':
-                i += 2
-                continue
+                i += 2; continue
             elif c == quote:
                 quote = None
         else:
             if c in "'\"":
                 if src.startswith(c * 3, i):
-                    quote = c
-                    triple = True
-                    i += 3
-                    continue
+                    quote = c; triple = True; i += 3; continue
                 quote = c
-            elif c in '([{':
-                depth += 1
+            elif c in '([{': depth += 1
             elif c in ')]}':
-                if depth == 0:
-                    break
+                if depth == 0: break
                 depth -= 1
-            elif c == ',' and depth == 0:
-                break
+            elif c == ',' and depth == 0: break
         i += 1
     return src[:expr_start] + replacement + src[i:], True
 
-# The Y1 Pro returns data=null for getBattery and times out for getWaterInfo.
-s = re.sub(
-    r'availability=CapabilityEvent\(\s*AvailabilityEvent,\s*\[GetBattery\(is_available_check=True\)\]\s*\),',
-    'availability=None,', s, count=1, flags=re.S)
+# Y1 Pro returns data=null for getBattery. Do not expose any profile capability
+# that causes the library to poll/parse getBattery.
+s = re.sub(r'GetBattery\(is_available_check=True\)', 'GetBattery_DISABLED()', s)
+s = re.sub(r'\bGetBattery\(\)', 'GetBattery_DISABLED()', s)
+s, found = replace_kw(s, 'availability', 'None')
+print('AVAILABILITY_DISABLED:', found)
 
+# Y1 Pro has also proven incompatible with the N20 water/map polling format.
 for kw in ('water', 'map'):
     s, found = replace_kw(s, kw, 'None')
     print(f'{kw.upper()}_DISABLED:', found)
 
 p.write_text(s)
-
-# Verify syntax and the resulting profile.
 compile(s, str(p), 'exec')
+importlib.invalidate_caches()
 m = importlib.import_module('deebot_client.hardware.cqyi87')
 info = m.get_device_info()
 print('CQYI87 IMPORT OK')
+print('GETBATTERY_REFERENCES:', s.count('GetBattery('))
 print('CAPABILITIES:', info.capabilities)
 PY
 
 echo
-echo "Y1 Pro profile updated: water/map disabled because the Y1 Pro rejects those N20 commands."
+echo "Y1 Pro profile updated: battery, water and map polling disabled."
 echo "Restart Home Assistant Core to load the updated profile."
 echo "Backup: $BACKUP"
