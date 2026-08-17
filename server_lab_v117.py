@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from installed_client_inspector import inspect as inspect_client, core_inspection_script
 
-VERSION="1.1.7"; PORT=8099; HA=Path('/homeassistant'); SHARE=Path('/share'); TOKEN=os.environ.get('SUPERVISOR_TOKEN')
+VERSION="1.1.8"; PORT=8099; HA=Path('/homeassistant'); SHARE=Path('/share'); TOKEN=os.environ.get('SUPERVISOR_TOKEN')
 JOBS={}; LOCK=threading.Lock()
 MATCH=re.compile(r'ecovacs|deebot|beepbop|cqyi87|CARTESIAN|clean_V2|setWorkMode|getWorkMode|workState|motionState|30000|10000|p2p|cmdName|unsupported|exception|traceback|error',re.I)
 SECRET=re.compile(r'token|password|secret|authorization|cookie|access_token|refresh_token',re.I)
