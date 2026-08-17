@@ -4,7 +4,7 @@ FROM ${BUILD_FROM}
 RUN apk add --no-cache python3 docker-cli
 
 WORKDIR /app
-COPY server_y1_v131.py /app/server.py
+COPY server_y1_v132.py /app/server.py
 
 RUN python3 -m py_compile /app/server.py
 
