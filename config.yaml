@@ -1,5 +1,5 @@
 name: DEEBOT Y1 PRO Diagnostics
-version: "1.1.4"
+version: "1.1.5"
 slug: deebot_y1_pro_diagnostics
 description: Diagnostic toolkit for DEEBOT Y1 PRO and Home Assistant DEEBOT integrations
 url: https://github.com/danielmessem/vacuumReminer
