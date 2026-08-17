@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from installed_client_inspector import inspect as inspect_client, core_inspection_script
 
-VERSION = "1.1.3"
+VERSION = "1.1.5"
 PORT = 8099
 HA = Path("/homeassistant")
 SHARE = Path("/share")
@@ -67,6 +67,7 @@ def snapshot():
     l=logs(); return {"timestamp":now(),"config_entries":redact(entries()),"states":[x for x in states() if "ecovacs" in json.dumps(x).lower() or "deebot" in json.dumps(x).lower() or "beepbop" in json.dumps(x).lower()],"logs":l,"error_log":error_log(),"client_inspection":inspect_client("\n".join(l["matching_lines"]))}
 
 def bundle(obj):
+    SHARE.mkdir(parents=True, exist_ok=True)
     p=SHARE/f"deebot-y1pro-deep-diagnostic-{datetime.now():%Y%m%d-%H%M%S}.zip"
     with zipfile.ZipFile(p,"w",zipfile.ZIP_DEFLATED) as z:
         z.writestr("diagnostic.json",json.dumps(redact(obj),indent=2,default=str)); z.writestr("core-inspection.sh",core_inspection_script()); z.writestr("README.txt",f"DEEBOT Y1 PRO Diagnostics v{VERSION}.\n")
@@ -104,11 +105,14 @@ def page(job=None):
 
 INDEX='''<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>DEEBOT Diagnostics</title><style>body{font-family:system-ui;max-width:900px;margin:25px auto;padding:0 18px}.card{border:1px solid #ddd;border-radius:10px;padding:18px;margin:12px 0}button{padding:12px 18px;border:1px solid #aaa;border-radius:8px;background:white;font-size:16px;cursor:pointer}</style></head><body><h1>DEEBOT Y1 PRO Diagnostics</h1><p>Version <b>VERSION</b></p><div class="card"><h2>Deep Y1 PRO Capture</h2><p>This starts the diagnostic job immediately and opens its live progress page.</p><form action="./api/deep" method="get"><button type="submit">Run Deep Capture</button></form></div><div class="card"><a href="./api/diagnostic">Run Normal Diagnostic</a> | <a href="./api/health">Health</a> | <a href="./api/core-inspection-script">Inspection Script</a></div></body></html>'''
 
-PROGRESS='''<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>DEEBOT Capture</title><style>body{font-family:system-ui;max-width:900px;margin:25px auto;padding:0 18px}.bar{height:20px;background:#ddd;border-radius:10px;overflow:hidden}.fill{height:100%;background:#1976d2;width:0}.log{background:#111;color:#eee;padding:12px;border-radius:8px;white-space:pre-wrap;font:12px monospace;min-height:220px;max-height:500px;overflow:auto}</style></head><body><h1>DEEBOT Y1 PRO Deep Capture</h1><p>Version <b>VERSION</b> · Job <code>JOB</code></p><div class="bar"><div id="f" class="fill"></div></div><h3 id="s">Starting…</h3><div id="l" class="log">Starting diagnostic job…</div><p id="d"></p><script>(function(){const base='./job/JOB';function poll(){fetch(base+'?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(x=>{document.getElementById('f').style.width=(x.percent||0)+'%';document.getElementById('s').textContent=(x.percent||0)+'% — '+(x.message||'Working');document.getElementById('l').textContent=(x.events||[]).map(e=>'['+e.time+'] '+e.message).join('\\n');if(x.status==='complete'){document.getElementById('d').innerHTML='<a href="../download/JOB">Download diagnostic ZIP</a>'}else if(x.status==='error'){document.getElementById('s').textContent='ERROR — '+x.message}else setTimeout(poll,500)}).catch(e=>{document.getElementById('s').textContent='Polling error — '+e;setTimeout(poll,2000)})}poll()})()</script></body></html>'''
+PROGRESS='''<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>DEEBOT Capture</title><style>body{font-family:system-ui;max-width:900px;margin:25px auto;padding:0 18px}.bar{height:20px;background:#ddd;border-radius:10px;overflow:hidden}.fill{height:100%;background:#1976d2;width:0}.log{background:#111;color:#eee;padding:12px;border-radius:8px;white-space:pre-wrap;font:12px monospace;min-height:220px;max-height:500px;overflow:auto}</style></head><body><h1>DEEBOT Y1 PRO Deep Capture</h1><p>Version <b>VERSION</b> · Job <code>JOB</code></p><div class="bar"><div id="f" class="fill"></div></div><h3 id="s">Starting…</h3><div id="l" class="log">Starting diagnostic job…</div><p id="d"></p><script>(function(){const base='./job/JOB';function poll(){fetch(base+'?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(x=>{document.getElementById('f').style.width=(x.percent||0)+'%';document.getElementById('s').textContent=(x.percent||0)+'% — '+(x.message||'Working');document.getElementById('l').textContent=(x.events||[]).map(e=>'['+e.time+'] '+e.message).join('\\n');if(x.status==='complete'){document.getElementById('d').innerHTML='<a href="./download/JOB">Download diagnostic ZIP</a>'}else if(x.status==='error'){document.getElementById('s').textContent='ERROR — '+x.message}else setTimeout(poll,500)}).catch(e=>{document.getElementById('s').textContent='Polling error — '+e;setTimeout(poll,2000)})}poll()})()</script></body></html>'''
 
 class H(BaseHTTPRequestHandler):
-    def send(self,code,body,ctype="application/json"):
-        if isinstance(body,str): body=body.encode(); self.send_response(code); self.send_header("Content-Type",ctype); self.send_header("Content-Length",str(len(body))); self.send_header("Cache-Control","no-store"); self.end_headers(); self.wfile.write(body)
+    def send(self,code,body,ctype="application/json",filename=None):
+        if isinstance(body,str): body=body.encode()
+        self.send_response(code); self.send_header("Content-Type",ctype); self.send_header("Content-Length",str(len(body))); self.send_header("Cache-Control","no-store")
+        if filename: self.send_header("Content-Disposition",f'attachment; filename="{filename}"')
+        self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         p=self.path.split("?",1)[0]
         if p in ("","/"): return self.send(200,page(),"text/html; charset=utf-8")
@@ -124,7 +128,9 @@ class H(BaseHTTPRequestHandler):
         if m:
             with LOCK: x=JOBS.get(m.group(1))
             if not x or x.get("status")!="complete": return self.send(404,json.dumps({"error":"not ready"}))
-            q=Path(x["file"]); return self.send(200,q.read_bytes(),"application/zip")
+            q=Path(x["file"])
+            if not q.is_file(): return self.send(404,json.dumps({"error":"diagnostic file missing"}))
+            return self.send(200,q.read_bytes(),"application/zip",q.name)
         return self.send(404,json.dumps({"error":"not found"}))
     def do_POST(self):
         if self.path.split("?",1)[0]=="/api/deep": return self.send(202,json.dumps({"job":start_job()}))
