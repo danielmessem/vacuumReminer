@@ -15,7 +15,7 @@ from deebot_client.capabilities import (
     DeviceType,
 )
 from deebot_client.commands.json.charge import Charge
-from deebot_client.commands.json.clean import CleanAreaV2, CleanV2
+from deebot_client.commands.json.clean import Clean, CleanArea
 from deebot_client.commands.json.custom import CustomCommand
 from deebot_client.commands.json.fan_speed import SetFanSpeed
 from deebot_client.commands.json.life_span import ResetLifeSpan
@@ -33,7 +33,7 @@ from deebot_client.events import (
 )
 from deebot_client.models import StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.1"
+Y1PRO_PATCH_VERSION = "1.5.3"
 
 
 def get_device_info() -> StaticDeviceInfo:
@@ -46,7 +46,7 @@ def get_device_info() -> StaticDeviceInfo:
             battery=None,
             charge=CapabilityExecute(Charge),
             clean=CapabilityClean(
-                action=CapabilityCleanAction(command=CleanV2, area=CleanAreaV2)
+                action=CapabilityCleanAction(command=Clean, area=CleanArea)
             ),
             custom=CapabilityCustomCommand(
                 event=CustomCommandEvent, get=[], set=CustomCommand
@@ -63,8 +63,6 @@ def get_device_info() -> StaticDeviceInfo:
                     FanSpeedLevel.MAX_PLUS,
                 ),
             ),
-            # Home Assistant dereferences life_span.types even when no
-            # lifespan counters are supported, so provide an empty container.
             life_span=CapabilityLifeSpan(
                 event=LifeSpanEvent,
                 get=[],
@@ -77,8 +75,6 @@ def get_device_info() -> StaticDeviceInfo:
             settings=CapabilitySettings(),
             state=CapabilityEvent(StateEvent, []),
             station=None,
-            # HA also dereferences stats.clean/report/total. Empty event
-            # containers avoid unsupported polling while satisfying the API.
             stats=CapabilityStats(
                 clean=CapabilityEvent(StatsEvent, []),
                 report=CapabilityEvent(ReportStatsEvent, []),
