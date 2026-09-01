@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.7.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.8.
 
 Keeps the main diagnostics server intact while fixing Home Assistant API token
-discovery, tightening telemetry redaction, simplifying the room mapper UI, and
-adding a copy button for diagnostic output.
+discovery, tightening telemetry redaction, simplifying the room mapper UI,
+adding a copy button for diagnostic output, and generating the Y1 PRO 1.6.6
+profile with corrected map coordinate units.
 """
 import json
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.7"
+VERSION = "1.9.8"
 s.VERSION = VERSION
 
 
@@ -85,8 +86,47 @@ def redact(value):
 
 s.redact = redact
 
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.7")
+
+# Build the 1.6.6 profile from the known-good 1.6.5 source. The Y1 map metadata
+# uses centimetre-scale coordinates when resolution is a small value (observed
+# as 5). deebot-client's native renderer expects millimetres, so 1.6.5 rendered
+# a recognisable map about 10x too small internally, making every raster cell
+# appear huge. Expand those map coordinates by 10 before mapping to the native
+# 50 mm grid. Vacuum command/state protocol is intentionally unchanged.
+def build_scaled_profile():
+    src = Path("/app/cqyi87_profile.py")
+    dst = Path("/app/cqyi87_profile_166.py")
+    text = src.read_text()
+    text = text.replace('Y1PRO_PATCH_VERSION = "1.6.5"', 'Y1PRO_PATCH_VERSION = "1.6.6"', 1)
+    marker = '        y_max = float(map_data.get("yMax", 0))\n'
+    replacement = (
+        marker
+        + '        # Y1 map coordinates are centimetre-scale when resolution is small.\n'
+        + '        # Native deebot-client map coordinates are millimetres.\n'
+        + '        unit_scale = 10.0 if 0 < resolution <= 10 else 1.0\n'
+    )
+    if marker not in text:
+        raise RuntimeError("Could not locate Y1 map coordinate block")
+    text = text.replace(marker, replacement, 1)
+    old_y = '        y_mm = y_max - (row * resolution)\n'
+    new_y = '        y_mm = (y_max - (row * resolution)) * unit_scale\n'
+    old_x = '            x_mm = x_min + (col * resolution)\n'
+    new_x = '            x_mm = (x_min + (col * resolution)) * unit_scale\n'
+    if old_y not in text or old_x not in text:
+        raise RuntimeError("Could not locate Y1 raster scale formulas")
+    text = text.replace(old_y, new_y, 1).replace(old_x, new_x, 1)
+    dst.write_text(text)
+    return dst
+
+
+try:
+    s.PROFILE_PATH = build_scaled_profile()
+except Exception as exc:
+    print(f"WARNING: could not build Y1 PRO 1.6.6 profile: {exc}", flush=True)
+
+
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.8")
 
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
