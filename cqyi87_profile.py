@@ -27,7 +27,7 @@ from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, Room, State, StaticDeviceInfo
 from deebot_client.rs.map import PositionType, RotationAngle
 
-Y1PRO_PATCH_VERSION = "1.6.3"
+Y1PRO_PATCH_VERSION = "1.6.4"
 _Y1PRO_PAUSED = False
 _Y1PRO_CHARGE_STATUS: bool | None = None
 
@@ -113,12 +113,10 @@ def _map_data(event_bus, data: dict[str, Any]) -> HandlingResult:
         event_bus.notify(PositionsEvent(positions=positions))
         handled = True
 
-    # Visual raster is intentionally not emitted yet; Y1 uses a different LZ4 raster format.
     return HandlingResult.success() if handled else HandlingResult.analyse()
 
 
 class Y1ProMapCommand(JsonCommandMqttP2P):
-    """30001 request/response command with MQTT P2P support."""
     NAME = "30001"
 
     def __init__(self, args: dict[str, Any] | None = None) -> None:
@@ -210,15 +208,27 @@ class Y1ProFieldCommand(JsonCommandMqttP2P):
         fields = data.get("fields", []) if isinstance(data, dict) else []
         return cls(fields if isinstance(fields, list) else [])
 
+    def _handle_field_data(self, event_bus, data: Any) -> HandlingResult:
+        if isinstance(data, (str, bytes, bytearray)):
+            try:
+                data = orjson.loads(data)
+            except Exception:
+                return HandlingResult.analyse()
+        if isinstance(data, dict) and "body" in data:
+            body = data.get("body", {})
+            if isinstance(body, dict) and body.get("code", 0) not in (0, None):
+                return HandlingResult(HandlingState.FAILED)
+            data = body.get("data", {}) if isinstance(body, dict) else {}
+        elif isinstance(data, dict) and "data" in data and not any(k in data for k in ("battery", "chargeStatus", "status", "pauseSwitch")):
+            data = data.get("data", {})
+        return Y1ProStateMessage._handle_body_data_dict(event_bus, data) if isinstance(data, dict) else HandlingResult.analyse()
+
+    def _handle_response(self, event_bus, response: dict[str, Any]) -> HandlingResult:
+        data: Any = response.get("resp", response) if isinstance(response, dict) else response
+        return self._handle_field_data(event_bus, data)
+
     def _handle_mqtt_p2p(self, event_bus, response: dict[str, Any]) -> None:
-        if not isinstance(response, dict):
-            return
-        body = response.get("body", {})
-        if not isinstance(body, dict) or body.get("code") != 0:
-            return
-        data = body.get("data", {})
-        if isinstance(data, dict):
-            Y1ProStateMessage._handle_body_data_dict(event_bus, data)
+        self._handle_field_data(event_bus, response)
 
 
 class Y1ProMapMessage(MessageBodyDataDict):
