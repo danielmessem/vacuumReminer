@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.3.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.4.
 
 Keeps the main diagnostics server intact while fixing Home Assistant API token
-discovery and simplifying the room mapper UI for a single Y1 PRO.
+discovery, tightening telemetry redaction, and simplifying the room mapper UI for
+a single Y1 PRO.
 """
 import json
 import os
+import re
 import urllib.request
 from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.3"
+VERSION = "1.9.4"
 s.VERSION = VERSION
 
 
@@ -72,10 +74,23 @@ def ha_request(path, method="GET", data=None):
 
 s.ha_request = ha_request
 
+# Preserve the base redactor, then additionally hide the device MQTT resource
+# segment that follows /cqyi87/ in diagnostic topic paths.
+_base_redact = s.redact
+
+
+def redact(value):
+    text = _base_redact(value)
+    text = re.sub(r"(/cqyi87/)[^/\s]+(/)", r"\1<redacted-resource>\2", text, flags=re.I)
+    return text
+
+
+s.redact = redact
+
 # Stamp the actual package version into the UI regardless of the base server's
 # source version.
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.3")
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.4")
 
 # Keep the room mapper focused on this Y1 PRO. The backend auto-selects when
 # exactly one vacuum exists and refuses rather than commanding the wrong device
