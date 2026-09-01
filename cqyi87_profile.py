@@ -1,7 +1,10 @@
 """DEEBOT Y1 PRO compatibility profile."""
 from __future__ import annotations
 
+import base64
+import lzma
 from typing import Any
+
 import orjson
 
 from deebot_client.capabilities import (
@@ -18,8 +21,8 @@ from deebot_client.const import DataType
 from deebot_client.events import (
     AvailabilityEvent, BatteryEvent, CachedMapInfoEvent, CustomCommandEvent,
     FanSpeedEvent, FanSpeedLevel, LifeSpanEvent, MapChangedEvent, MapTraceEvent,
-    Position, PositionsEvent, ReportStatsEvent, RoomsEvent, StateEvent, StatsEvent,
-    TotalStatsEvent,
+    MinorMapEvent, Position, PositionsEvent, ReportStatsEvent, RoomsEvent,
+    StateEvent, StatsEvent, TotalStatsEvent,
 )
 from deebot_client.events.map import Map as MapDefinition
 from deebot_client.message import HandlingResult, HandlingState, MessageBodyDataDict
@@ -27,7 +30,7 @@ from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, Room, State, StaticDeviceInfo
 from deebot_client.rs.map import PositionType, RotationAngle
 
-Y1PRO_PATCH_VERSION = "1.6.4"
+Y1PRO_PATCH_VERSION = "1.6.5"
 _Y1PRO_PAUSED = False
 _Y1PRO_CHARGE_STATUS: bool | None = None
 
@@ -52,6 +55,194 @@ class Y1ProCleanArea(CustomCommand):
 class Y1ProCharge(CustomCommand):
     def __init__(self) -> None:
         super().__init__("40013", {"chargeSwitch": True})
+
+
+def _b64decode(value: str) -> bytes:
+    raw = value.strip()
+    raw += "=" * (-len(raw) % 4)
+    try:
+        return base64.b64decode(raw, validate=False)
+    except Exception:
+        return base64.urlsafe_b64decode(raw)
+
+
+def _lz4_block_decode(src: bytes) -> bytes:
+    """Small dependency-free LZ4 block decoder for Y1 mapData."""
+    out = bytearray()
+    i = 0
+    n = len(src)
+    while i < n:
+        token = src[i]
+        i += 1
+        literal_len = token >> 4
+        if literal_len == 15:
+            while True:
+                if i >= n:
+                    raise ValueError("truncated LZ4 literal length")
+                b = src[i]
+                i += 1
+                literal_len += b
+                if b != 255:
+                    break
+        if i + literal_len > n:
+            raise ValueError("truncated LZ4 literals")
+        out.extend(src[i:i + literal_len])
+        i += literal_len
+        if i >= n:
+            break
+        if i + 2 > n:
+            raise ValueError("truncated LZ4 offset")
+        offset = src[i] | (src[i + 1] << 8)
+        i += 2
+        if offset <= 0 or offset > len(out):
+            raise ValueError("invalid LZ4 offset")
+        match_len = token & 0x0F
+        if match_len == 15:
+            while True:
+                if i >= n:
+                    raise ValueError("truncated LZ4 match length")
+                b = src[i]
+                i += 1
+                match_len += b
+                if b != 255:
+                    break
+        match_len += 4
+        for _ in range(match_len):
+            out.append(out[-offset])
+    return bytes(out)
+
+
+def _lz4_decode(src: bytes) -> bytes:
+    """Decode either an LZ4 raw block or a basic LZ4 frame."""
+    if not src.startswith(b"\x04\x22\x4d\x18"):
+        return _lz4_block_decode(src)
+
+    if len(src) < 7:
+        raise ValueError("truncated LZ4 frame")
+    flg = src[4]
+    p = 6
+    if flg & 0x08:  # content size
+        p += 8
+    if flg & 0x01:  # dictionary id
+        p += 4
+    p += 1  # header checksum
+    out = bytearray()
+    while True:
+        if p + 4 > len(src):
+            raise ValueError("truncated LZ4 frame block size")
+        block_size = int.from_bytes(src[p:p + 4], "little")
+        p += 4
+        if block_size == 0:
+            break
+        uncompressed = bool(block_size & 0x80000000)
+        block_size &= 0x7FFFFFFF
+        if p + block_size > len(src):
+            raise ValueError("truncated LZ4 frame block")
+        block = src[p:p + block_size]
+        p += block_size
+        out.extend(block if uncompressed else _lz4_block_decode(block))
+        if flg & 0x10:  # block checksum
+            p += 4
+    return bytes(out)
+
+
+def _find_map_blob(map_data: dict[str, Any]) -> str | None:
+    for key in ("data", "lz4Data", "map", "value", "blob", "raw"):
+        value = map_data.get(key)
+        if isinstance(value, str) and len(value) > 64:
+            return value
+    candidates = [
+        value for key, value in map_data.items()
+        if isinstance(value, str) and len(value) > 64 and key not in ("mapId", "id")
+    ]
+    return max(candidates, key=len, default=None)
+
+
+def _compress_native_map_piece(raw: bytes) -> str:
+    """Encode a 100x100 piece in the shortened LZMA form deebot-client expects."""
+    compressed = lzma.compress(raw, format=lzma.FORMAT_ALONE)
+    if len(compressed) < 13:
+        raise ValueError("unexpected LZMA output")
+    shortened = compressed[:8] + compressed[12:]
+    return base64.b64encode(shortened).decode()
+
+
+def _pixel_index(value: int) -> int:
+    """Keep common Ecovacs map indices within the renderer's supported palette."""
+    if value <= 0:
+        return 0
+    if value <= 5:
+        return value
+    # Newer Ecovacs maps often encode room/floor classes above the base palette.
+    # The native renderer already treats indices >6 as room colors, so preserve a
+    # stable room distinction while constraining the value to its palette range.
+    return 6 + ((value - 6) % 6)
+
+
+def _emit_y1_raster(event_bus, map_data: dict[str, Any]) -> bool:
+    """Convert Y1 LZ4 raster into deebot-client's native 8x8 map pieces."""
+    try:
+        width = int(map_data.get("width", 0))
+        height = int(map_data.get("height", 0))
+        resolution = float(map_data.get("resolution", 50) or 50)
+        x_min = float(map_data.get("xMin", 0))
+        y_max = float(map_data.get("yMax", 0))
+    except Exception:
+        return False
+    if width <= 0 or height <= 0 or width > 2000 or height > 2000:
+        return False
+    blob = _find_map_blob(map_data)
+    if not blob:
+        return False
+    try:
+        packed = _b64decode(blob)
+        raw = _lz4_decode(packed)
+    except Exception:
+        return False
+
+    expected = width * height
+    if len(raw) < expected:
+        return False
+    if len(raw) > expected:
+        # Some firmware prefixes metadata before the raster. Prefer the final
+        # width*height bytes, which is where Ecovacs map pixels are normally kept.
+        raw = raw[-expected:]
+
+    pieces: dict[int, bytearray] = {}
+    for row in range(height):
+        y_mm = y_max - (row * resolution)
+        gy = int(round(400 - (y_mm / 50.0)))
+        if gy < 0 or gy >= 800:
+            continue
+        piece_row_from_top = gy // 100
+        piece_row_from_bottom = 7 - piece_row_from_top
+        oy = gy % 100
+        for col in range(width):
+            value = _pixel_index(raw[row * width + col])
+            if value == 0:
+                continue
+            x_mm = x_min + (col * resolution)
+            gx = int(round(400 + (x_mm / 50.0)))
+            if gx < 0 or gx >= 800:
+                continue
+            piece_col = gx // 100
+            ox = gx % 100
+            index = piece_col * 8 + piece_row_from_bottom
+            piece = pieces.setdefault(index, bytearray(10000))
+            # BackgroundImage rotates each incoming piece 90 degrees CCW.
+            # Reverse that transform so the Y1 raster lands at (gx, gy).
+            input_x = 99 - oy
+            input_y = ox
+            piece[input_y * 100 + input_x] = value
+
+    if not pieces:
+        return False
+    try:
+        for index, pixels in pieces.items():
+            event_bus.notify(MinorMapEvent(index=index, value=_compress_native_map_piece(bytes(pixels))))
+    except Exception:
+        return False
+    return True
 
 
 def _map_data(event_bus, data: dict[str, Any]) -> HandlingResult:
@@ -109,6 +300,8 @@ def _map_data(event_bus, data: dict[str, Any]) -> HandlingResult:
                 positions.append(Position(PositionType.CHARGER, int(charge.get("x", 0)), int(charge.get("y", 0)), int(charge.get("a", 0))))
             except Exception:
                 pass
+        if _emit_y1_raster(event_bus, map_data):
+            handled = True
     if positions:
         event_bus.notify(PositionsEvent(positions=positions))
         handled = True
@@ -262,7 +455,9 @@ def get_device_info() -> StaticDeviceInfo:
                 cached_info=CapabilityEvent(CachedMapInfoEvent, [Y1ProMapCommand({"fields": ["mapInfos"]})]),
                 changed=CapabilityEvent(MapChangedEvent, []),
                 major=None,
-                minor=None,
+                # A non-None minor capability makes deebot-client subscribe to
+                # MinorMapEvent. Y1 pieces are generated locally from mapData.
+                minor=CapabilityExecute(lambda index, map_id: Y1ProMapCommand({"mapId": str(map_id), "fields": ["mapData"]})),
                 position=CapabilityEvent(PositionsEvent, []),
                 rooms=CapabilityEvent(RoomsEvent, []),
                 set=CapabilityExecute(lambda map_id, _set_type: Y1ProMapCommand({"mapId": str(map_id), "fields": ["mapData", "areas", "pos"]})),
