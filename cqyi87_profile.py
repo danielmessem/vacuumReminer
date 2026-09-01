@@ -45,7 +45,7 @@ from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, Room, State, StaticDeviceInfo
 from deebot_client.rs.map import PositionType, RotationAngle
 
-Y1PRO_PATCH_VERSION = "1.6.0"
+Y1PRO_PATCH_VERSION = "1.6.1"
 
 _Y1PRO_PAUSED = False
 _Y1PRO_CHARGE_STATUS: bool | None = None
@@ -315,6 +315,8 @@ def get_device_info() -> StaticDeviceInfo:
             map=CapabilityMap(
                 cached_info=CapabilityEvent(CachedMapInfoEvent, [Y1ProGetMapInfos()]),
                 changed=CapabilityEvent(MapChangedEvent, []),
+                major=None,
+                minor=None,
                 position=CapabilityEvent(PositionsEvent, []),
                 rooms=CapabilityEvent(RoomsEvent, []),
                 set=CapabilityExecute(Y1ProMapSetRequest),
