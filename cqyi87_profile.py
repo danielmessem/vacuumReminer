@@ -36,13 +36,13 @@ from deebot_client.message import HandlingResult, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.11"
+Y1PRO_PATCH_VERSION = "1.5.12"
 
-# Home Assistant exposes a single start/resume path for this vacuum.  The
-# Y1 PRO requires different device commands for a fresh start and a resume.
-# This flag is updated only from passive robot telemetry so known-good start,
-# pause and return commands remain unchanged.
+# Home Assistant exposes a single start/resume path for this vacuum. The
+# Y1 PRO requires different commands for a fresh start and a resume. These
+# flags are updated only from passive robot telemetry.
 _Y1PRO_PAUSED = False
+_Y1PRO_CHARGE_STATUS: bool | None = None
 
 
 class Y1ProClean(CustomCommand):
@@ -77,7 +77,7 @@ class Y1ProCharge(CustomCommand):
 
 
 class Y1ProStateMessage(MessageBodyDataDict):
-    """Passively map observed Y1 PRO 10000 status updates to HA state."""
+    """Passively map observed Y1 PRO 10000 updates to HA state."""
 
     NAME = "10000"
 
@@ -85,10 +85,18 @@ class Y1ProStateMessage(MessageBodyDataDict):
     def _handle_body_data_dict(
         cls, event_bus, data: dict[str, Any]
     ) -> HandlingResult:
-        global _Y1PRO_PAUSED
+        global _Y1PRO_PAUSED, _Y1PRO_CHARGE_STATUS
 
         pause_switch = data.get("pauseSwitch")
         status = data.get("status")
+        charge_status = data.get("chargeStatus")
+
+        if isinstance(charge_status, bool):
+            _Y1PRO_CHARGE_STATUS = charge_status
+            if charge_status:
+                _Y1PRO_PAUSED = False
+                event_bus.notify(StateEvent(State.DOCKED))
+                return HandlingResult.success()
 
         if pause_switch is True:
             _Y1PRO_PAUSED = True
@@ -102,18 +110,23 @@ class Y1ProStateMessage(MessageBodyDataDict):
             normalized = status.lower()
             if normalized == "smartclean":
                 _Y1PRO_PAUSED = False
+                _Y1PRO_CHARGE_STATUS = False
                 event_bus.notify(StateEvent(State.CLEANING))
                 return HandlingResult.success()
             if normalized == "gocharge":
                 _Y1PRO_PAUSED = False
+                _Y1PRO_CHARGE_STATUS = False
                 event_bus.notify(StateEvent(State.RETURNING))
                 return HandlingResult.success()
             if normalized == "idle":
                 _Y1PRO_PAUSED = False
+                state = State.DOCKED if _Y1PRO_CHARGE_STATUS is True else State.IDLE
+                event_bus.notify(StateEvent(state))
+                return HandlingResult.success()
 
-        # pauseSwitch:false by itself is useful for the state-aware command
-        # routing above, even when it does not fully determine a HA state.
-        if pause_switch is False:
+        # These telemetry-only fields are intentionally consumed even if they
+        # do not determine a complete HA vacuum state on their own.
+        if pause_switch is False or isinstance(charge_status, bool):
             return HandlingResult.success()
 
         return HandlingResult.analyse()
