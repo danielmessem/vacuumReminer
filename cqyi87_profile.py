@@ -32,9 +32,12 @@ from deebot_client.events import (
     StatsEvent,
     TotalStatsEvent,
 )
-from deebot_client.models import CleanAction, CleanMode, StaticDeviceInfo
+from deebot_client.messages import HandlingResult
+from deebot_client.messages.json import MESSAGES
+from deebot_client.messages.json.common import MessageBodyDataDict
+from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.7"
+Y1PRO_PATCH_VERSION = "1.5.8"
 
 
 class Y1ProClean(CustomCommand):
@@ -67,6 +70,36 @@ class Y1ProCharge(CustomCommand):
 
     def __init__(self) -> None:
         super().__init__("40013", {"chargeSwitch": True})
+
+
+class Y1ProStateMessage(MessageBodyDataDict):
+    """Passively map observed Y1 PRO 10000 status updates to HA state."""
+
+    NAME = "10000"
+
+    @classmethod
+    async def _handle_body_data_dict(cls, event_bus, data: dict[str, Any]) -> HandlingResult:
+        status = data.get("status")
+        pause_switch = data.get("pauseSwitch")
+
+        if pause_switch is True:
+            event_bus.notify(StateEvent(State.PAUSED))
+            return HandlingResult.SUCCESS
+
+        if isinstance(status, str):
+            normalized = status.lower()
+            if normalized == "smartclean":
+                event_bus.notify(StateEvent(State.CLEANING))
+                return HandlingResult.SUCCESS
+            if normalized == "gocharge":
+                event_bus.notify(StateEvent(State.RETURNING))
+                return HandlingResult.SUCCESS
+
+        return HandlingResult.ANALYSE
+
+
+# Passive registration only: no polling/get commands are added.
+MESSAGES["10000"] = Y1ProStateMessage
 
 
 def get_device_info() -> StaticDeviceInfo:
