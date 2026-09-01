@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.6.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.7.
 
 Keeps the main diagnostics server intact while fixing Home Assistant API token
-discovery, tightening telemetry redaction, and simplifying the room mapper UI for
-a single Y1 PRO.
+discovery, tightening telemetry redaction, simplifying the room mapper UI, and
+adding a copy button for diagnostic output.
 """
 import json
 import os
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.6"
+VERSION = "1.9.7"
 s.VERSION = VERSION
 
 
@@ -85,8 +85,8 @@ def redact(value):
 
 s.redact = redact
 
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.6")
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.7")
 
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
@@ -99,6 +99,16 @@ s.HTML = s.HTML.replace(
 s.HTML = s.HTML.replace(
     "let current=roomVacuum.value;roomVacuum.innerHTML='';for(let e of (r.vacuum_entities||[])){let op=document.createElement('option');op.value=e.entity_id;op.textContent=(e.attributes&&e.attributes.friendly_name?e.attributes.friendly_name+' - ':'')+e.entity_id;roomVacuum.appendChild(op)}if(current)[...roomVacuum.options].forEach(x=>{if(x.value===current)x.selected=true});let saved=r.rooms||{};",
     "let saved=r.rooms||{};",
+)
+
+# Add a copy action directly above the shared JSON output panel.
+s.HTML = s.HTML.replace(
+    '<section class="card full"><h2>Output</h2><pre id=o>Ready.</pre></section>',
+    '<section class="card full"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Output</h2><button id=copyOutputBtn onclick=copyOutput()>Copy</button></div><pre id=o>Ready.</pre></section>',
+)
+s.HTML = s.HTML.replace(
+    "async function post(p,b={}",
+    "async function copyOutput(){let text=o.textContent||'';try{await navigator.clipboard.writeText(text);let old=copyOutputBtn.textContent;copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent=old,1200)}catch(e){let ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent='Copy',1200)}}async function post(p,b={}",
 )
 
 if __name__ == "__main__":
