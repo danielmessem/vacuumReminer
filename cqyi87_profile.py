@@ -35,9 +35,9 @@ from deebot_client.events import (
 )
 from deebot_client.message import HandlingResult, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
-from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
+from deebot_client.models import CleanAction, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.13"
+Y1PRO_PATCH_VERSION = "1.5.14"
 
 _Y1PRO_PAUSED = False
 _Y1PRO_CHARGE_STATUS: bool | None = None
@@ -80,8 +80,6 @@ class Y1ProStateMessage(MessageBodyDataDict):
         status = data.get("status")
         charge_status = data.get("chargeStatus")
 
-        # Y1 PRO publishes battery percentage directly in message 10000.
-        # Keep this passive: do not add the unsupported 10001 polling path.
         if isinstance(battery, (int, float)) and not isinstance(battery, bool):
             battery_value = int(battery)
             if 0 <= battery_value <= 100:
@@ -107,7 +105,7 @@ class Y1ProStateMessage(MessageBodyDataDict):
 
         if isinstance(status, str):
             normalized = status.lower()
-            if normalized == "smartclean":
+            if normalized in ("smartclean", "areaclean"):
                 _Y1PRO_PAUSED = False
                 _Y1PRO_CHARGE_STATUS = False
                 event_bus.notify(StateEvent(State.CLEANING))
