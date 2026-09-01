@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 2.0.0.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 2.0.1.
 
 Keeps the diagnostics server intact while fixing Home Assistant API token
 discovery, tightening telemetry redaction, simplifying the room mapper UI,
-adding a copy button for diagnostic output, and generating the Y1 PRO 1.7.1
-profile with map improvements plus active startup availability bootstrap.
+adding copy/map diagnostics actions, and generating the Y1 PRO 1.7.2 profile
+with map improvements plus active startup availability/state bootstrap.
 """
 import json
 import os
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 s.VERSION = VERSION
 
 
@@ -86,10 +86,10 @@ def redact(value):
 s.redact = redact
 
 
-def build_profile_171():
-    """Build 1.7.1 from known-good 1.6.5 protocol profile."""
+def build_profile_172():
+    """Build 1.7.2 from known-good 1.6.5 protocol profile."""
     src = Path("/app/cqyi87_profile.py")
-    dst = Path("/app/cqyi87_profile_171.py")
+    dst = Path("/app/cqyi87_profile_172.py")
     text = src.read_text()
 
     text = text.replace(
@@ -99,7 +99,7 @@ def build_profile_171():
     )
     text = text.replace(
         'Y1PRO_PATCH_VERSION = "1.6.5"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n',
-        'Y1PRO_PATCH_VERSION = "1.7.1"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n_Y1PRO_MAP_DIAG_LOGGED = False\n_LOGGER = logging.getLogger(__name__)\n',
+        'Y1PRO_PATCH_VERSION = "1.7.2"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n_Y1PRO_MAP_DIAG_LOGGED = False\n_LOGGER = logging.getLogger(__name__)\n',
         1,
     )
 
@@ -110,9 +110,7 @@ def build_profile_171():
     text = text.replace(old_pixel, new_pixel, 1)
 
     marker = '        y_max = float(map_data.get("yMax", 0))\n'
-    replacement = marker + (
-        '        unit_scale = 10.0 if 0 < resolution <= 10 else 1.0\n'
-    )
+    replacement = marker + '        unit_scale = 10.0 if 0 < resolution <= 10 else 1.0\n'
     if marker not in text:
         raise RuntimeError("Could not locate Y1 map coordinate block")
     text = text.replace(marker, replacement, 1)
@@ -151,19 +149,19 @@ def build_profile_171():
     text = text.replace(old_positions, new_positions, 1)
 
     old_init = '''    def __init__(self, fields: list[str] | tuple[str, ...]) -> None:\n        self.fields = tuple(str(field) for field in fields)\n        super().__init__({"fields": list(self.fields)})\n'''
-    new_init = '''    def __init__(self, fields: list[str] | tuple[str, ...], is_available_check: bool = False) -> None:\n        self.fields = tuple(str(field) for field in fields)\n        self.is_available_check = bool(is_available_check)\n        super().__init__({"fields": list(self.fields)})\n'''
+    new_init = '''    def __init__(self, fields: list[str] | tuple[str, ...], is_available_check: bool = False, bootstrap_state: bool = False) -> None:\n        self.fields = tuple(str(field) for field in fields)\n        self.is_available_check = bool(is_available_check)\n        self.bootstrap_state = bool(bootstrap_state)\n        super().__init__({"fields": list(self.fields)})\n'''
     if old_init not in text:
         raise RuntimeError("Could not locate field-command constructor")
     text = text.replace(old_init, new_init, 1)
 
     old_return = '''        return Y1ProStateMessage._handle_body_data_dict(event_bus, data) if isinstance(data, dict) else HandlingResult.analyse()\n'''
-    new_return = '''        if isinstance(data, dict):\n            if self.is_available_check:\n                event_bus.notify(AvailabilityEvent(True))\n            return Y1ProStateMessage._handle_body_data_dict(event_bus, data)\n        return HandlingResult.analyse()\n'''
+    new_return = '''        if isinstance(data, dict):\n            if self.is_available_check:\n                event_bus.notify(AvailabilityEvent(True))\n            result = Y1ProStateMessage._handle_body_data_dict(event_bus, data)\n            if self.bootstrap_state and isinstance(data.get("chargeStatus"), bool) and data.get("chargeStatus") is False:\n                event_bus.notify(StateEvent(State.IDLE))\n                return HandlingResult.success()\n            return result\n        return HandlingResult.analyse()\n'''
     if old_return not in text:
         raise RuntimeError("Could not locate field-command response return")
     text = text.replace(old_return, new_return, 1)
 
     old_availability = '            availability=CapabilityEvent(AvailabilityEvent, []),\n'
-    new_availability = '            availability=CapabilityEvent(AvailabilityEvent, [Y1ProFieldCommand(["battery"], is_available_check=True)]),\n'
+    new_availability = '            availability=CapabilityEvent(AvailabilityEvent, [Y1ProFieldCommand(["battery"], is_available_check=True), Y1ProFieldCommand(["chargeStatus"], is_available_check=True, bootstrap_state=True)]),\n'
     if old_availability not in text:
         raise RuntimeError("Could not locate availability capability")
     text = text.replace(old_availability, new_availability, 1)
@@ -173,13 +171,29 @@ def build_profile_171():
 
 
 try:
-    s.PROFILE_PATH = build_profile_171()
+    s.PROFILE_PATH = build_profile_172()
 except Exception as exc:
-    print(f"WARNING: could not build Y1 PRO 1.7.1 profile: {exc}", flush=True)
+    print(f"WARNING: could not build Y1 PRO 1.7.2 profile: {exc}", flush=True)
 
 
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7", "v1.9.8", "v1.9.9"):
-    s.HTML = s.HTML.replace(old_version, "v2.0.0")
+# Surface map decoder diagnostics directly in Run diagnosis output.
+_base_diagnose = s.diagnose
+
+
+def diagnose_with_map_diag():
+    result = _base_diagnose()
+    _, _, raw = s.get_logs("30m")
+    result["y1pro_map_diagnostics"] = [
+        s.redact(line) for line in raw if "Y1PRO_MAP_DIAG" in line
+    ][-20:]
+    return result
+
+
+s.diagnose = diagnose_with_map_diag
+
+
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7", "v1.9.8", "v1.9.9", "v2.0.0"):
+    s.HTML = s.HTML.replace(old_version, "v2.0.1")
 
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
@@ -191,12 +205,16 @@ s.HTML = s.HTML.replace(
     "let saved=r.rooms||{};",
 )
 s.HTML = s.HTML.replace(
+    '<button class=primary onclick=call(\'diagnose\')>Run diagnosis</button>',
+    '<button class=primary onclick=call(\'diagnose\')>Run diagnosis</button><button onclick=mapDiagnostics()>Map diagnostics</button>',
+)
+s.HTML = s.HTML.replace(
     '<section class="card full"><h2>Output</h2><pre id=o>Ready.</pre></section>',
     '<section class="card full"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Output</h2><button id=copyOutputBtn onclick=copyOutput()>Copy</button></div><pre id=o>Ready.</pre></section>',
 )
 s.HTML = s.HTML.replace(
     "async function post(p,b={}",
-    "async function copyOutput(){let text=o.textContent||'';try{await navigator.clipboard.writeText(text);let old=copyOutputBtn.textContent;copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent=old,1200)}catch(e){let ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent='Copy',1200)}}async function post(p,b={}",
+    "async function copyOutput(){let text=o.textContent||'';try{await navigator.clipboard.writeText(text);let old=copyOutputBtn.textContent;copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent=old,1200)}catch(e){let ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();copyOutputBtn.textContent='Copied';setTimeout(()=>copyOutputBtn.textContent='Copy',1200)}}async function mapDiagnostics(){let r=await post('./api/diagnose');out({version:r.version||null,y1pro_map_diagnostics:r.y1pro_map_diagnostics||[],map_protocol_lines:(r.map_protocol_lines||[]).slice(-80)})}async function post(p,b={}",
 )
 
 if __name__ == "__main__":
