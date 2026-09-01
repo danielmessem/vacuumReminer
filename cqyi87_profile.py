@@ -36,7 +36,13 @@ from deebot_client.message import HandlingResult, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.10"
+Y1PRO_PATCH_VERSION = "1.5.11"
+
+# Home Assistant exposes a single start/resume path for this vacuum.  The
+# Y1 PRO requires different device commands for a fresh start and a resume.
+# This flag is updated only from passive robot telemetry so known-good start,
+# pause and return commands remain unchanged.
+_Y1PRO_PAUSED = False
 
 
 class Y1ProClean(CustomCommand):
@@ -44,10 +50,13 @@ class Y1ProClean(CustomCommand):
 
     def __init__(self, action: CleanAction) -> None:
         if action == CleanAction.START:
-            super().__init__(
-                "40001",
-                {"cleanSwitch": True, "cleanMode": "smart"},
-            )
+            if _Y1PRO_PAUSED:
+                super().__init__("40011", {"pauseSwitch": False})
+            else:
+                super().__init__(
+                    "40001",
+                    {"cleanSwitch": True, "cleanMode": "smart"},
+                )
             return
         if action == CleanAction.PAUSE:
             super().__init__("40009", {"pauseSwitch": True})
@@ -76,21 +85,36 @@ class Y1ProStateMessage(MessageBodyDataDict):
     def _handle_body_data_dict(
         cls, event_bus, data: dict[str, Any]
     ) -> HandlingResult:
+        global _Y1PRO_PAUSED
+
         pause_switch = data.get("pauseSwitch")
         status = data.get("status")
 
         if pause_switch is True:
+            _Y1PRO_PAUSED = True
             event_bus.notify(StateEvent(State.PAUSED))
             return HandlingResult.success()
+
+        if pause_switch is False:
+            _Y1PRO_PAUSED = False
 
         if isinstance(status, str):
             normalized = status.lower()
             if normalized == "smartclean":
+                _Y1PRO_PAUSED = False
                 event_bus.notify(StateEvent(State.CLEANING))
                 return HandlingResult.success()
             if normalized == "gocharge":
+                _Y1PRO_PAUSED = False
                 event_bus.notify(StateEvent(State.RETURNING))
                 return HandlingResult.success()
+            if normalized == "idle":
+                _Y1PRO_PAUSED = False
+
+        # pauseSwitch:false by itself is useful for the state-aware command
+        # routing above, even when it does not fully determine a HA state.
+        if pause_switch is False:
+            return HandlingResult.success()
 
         return HandlingResult.analyse()
 
