@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.1.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.3.
 
 Keeps the main diagnostics server intact while fixing Home Assistant API token
 discovery and simplifying the room mapper UI for a single Y1 PRO.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.1"
+VERSION = "1.9.3"
 s.VERSION = VERSION
 
 
@@ -74,8 +74,8 @@ s.ha_request = ha_request
 
 # Stamp the actual package version into the UI regardless of the base server's
 # source version.
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.1")
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.3")
 
 # Keep the room mapper focused on this Y1 PRO. The backend auto-selects when
 # exactly one vacuum exists and refuses rather than commanding the wrong device
