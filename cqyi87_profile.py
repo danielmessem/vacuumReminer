@@ -16,7 +16,6 @@ from deebot_client.capabilities import (
     CapabilityStats,
     DeviceType,
 )
-from deebot_client.commands.json.charge import Charge
 from deebot_client.commands.json.clean import CleanArea
 from deebot_client.commands.json.custom import CustomCommand
 from deebot_client.commands.json.fan_speed import SetFanSpeed
@@ -35,7 +34,7 @@ from deebot_client.events import (
 )
 from deebot_client.models import CleanAction, CleanMode, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.6"
+Y1PRO_PATCH_VERSION = "1.5.7"
 
 
 class Y1ProClean(CustomCommand):
@@ -63,6 +62,13 @@ class Y1ProClean(CustomCommand):
         super().__init__("clean", args)
 
 
+class Y1ProCharge(CustomCommand):
+    """Return Y1 PRO to its charger using the observed app protocol."""
+
+    def __init__(self) -> None:
+        super().__init__("40013", {"chargeSwitch": True})
+
+
 def get_device_info() -> StaticDeviceInfo:
     """Return the known-working conservative Y1 PRO profile."""
     return StaticDeviceInfo(
@@ -71,7 +77,7 @@ def get_device_info() -> StaticDeviceInfo:
             device_type=DeviceType.VACUUM,
             availability=CapabilityEvent(AvailabilityEvent, []),
             battery=None,
-            charge=CapabilityExecute(Charge),
+            charge=CapabilityExecute(Y1ProCharge),
             clean=CapabilityClean(
                 action=CapabilityCleanAction(command=Y1ProClean, area=CleanArea)
             ),
