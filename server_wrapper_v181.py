@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.9.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 2.0.0.
 
-Keeps the main diagnostics server intact while fixing Home Assistant API token
+Keeps the diagnostics server intact while fixing Home Assistant API token
 discovery, tightening telemetry redaction, simplifying the room mapper UI,
-adding a copy button for diagnostic output, and generating the Y1 PRO 1.7.0
-profile with improved map cleanup, coordinate alignment, and safe diagnostics.
+adding a copy button for diagnostic output, and generating the Y1 PRO 1.7.1
+profile with map improvements plus active startup availability bootstrap.
 """
 import json
 import os
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.9"
+VERSION = "2.0.0"
 s.VERSION = VERSION
 
 
@@ -27,7 +27,6 @@ def _read_token_file(path: str):
 
 
 def supervisor_token():
-    """Resolve only this add-on's own Supervisor token; never inspect Core secrets."""
     for key in ("SUPERVISOR_TOKEN", "HASSIO_TOKEN"):
         value = os.environ.get(key)
         if value:
@@ -87,10 +86,10 @@ def redact(value):
 s.redact = redact
 
 
-def build_profile_170():
-    """Build map-focused 1.7.0 from the known-good 1.6.5 protocol profile."""
+def build_profile_171():
+    """Build 1.7.1 from known-good 1.6.5 protocol profile."""
     src = Path("/app/cqyi87_profile.py")
-    dst = Path("/app/cqyi87_profile_170.py")
+    dst = Path("/app/cqyi87_profile_171.py")
     text = src.read_text()
 
     text = text.replace(
@@ -100,22 +99,19 @@ def build_profile_170():
     )
     text = text.replace(
         'Y1PRO_PATCH_VERSION = "1.6.5"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n',
-        'Y1PRO_PATCH_VERSION = "1.7.0"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n_Y1PRO_MAP_DIAG_LOGGED = False\n_LOGGER = logging.getLogger(__name__)\n',
+        'Y1PRO_PATCH_VERSION = "1.7.1"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n_Y1PRO_MAP_DIAG_LOGGED = False\n_LOGGER = logging.getLogger(__name__)\n',
         1,
     )
 
     old_pixel = '''def _pixel_index(value: int) -> int:\n    if value <= 0:\n        return 0\n    if value <= 5:\n        return value\n    return 6 + ((value - 6) % 6)\n'''
-    new_pixel = '''def _pixel_index(value: int) -> int:\n    # Y1 values 4/5 render as bright not-scanned/obstacle pixels in the native\n    # palette and were responsible for most of the white speckle/line noise.\n    if value <= 0 or value in (4, 5):\n        return 0\n    if value <= 3:\n        return value\n    return 6 + ((value - 6) % 6)\n'''
+    new_pixel = '''def _pixel_index(value: int) -> int:\n    if value <= 0 or value in (4, 5):\n        return 0\n    if value <= 3:\n        return value\n    return 6 + ((value - 6) % 6)\n'''
     if old_pixel not in text:
         raise RuntimeError("Could not locate pixel mapping block")
     text = text.replace(old_pixel, new_pixel, 1)
 
     marker = '        y_max = float(map_data.get("yMax", 0))\n'
-    replacement = (
-        marker
-        + '        # Y1 map coordinates are centimetre-scale when resolution is small.\n'
-        + '        # Native deebot-client map coordinates are millimetres.\n'
-        + '        unit_scale = 10.0 if 0 < resolution <= 10 else 1.0\n'
+    replacement = marker + (
+        '        unit_scale = 10.0 if 0 < resolution <= 10 else 1.0\n'
     )
     if marker not in text:
         raise RuntimeError("Could not locate Y1 map coordinate block")
@@ -132,7 +128,7 @@ def build_profile_170():
     )
 
     diag_marker = '''    if len(raw) > expected:\n        raw = raw[-expected:]\n\n    pieces: dict[int, bytearray] = {}\n'''
-    diag_replacement = '''    if len(raw) > expected:\n        raw = raw[-expected:]\n\n    global _Y1PRO_MAP_DIAG_LOGGED\n    if not _Y1PRO_MAP_DIAG_LOGGED:\n        counts = Counter(raw)\n        common = ",".join(f"{value}:{count}" for value, count in counts.most_common(24))\n        _LOGGER.warning(\n            "Y1PRO_MAP_DIAG width=%s height=%s resolution=%s unit_scale=%s "\n            "compressed_bytes=%s decoded_bytes=%s expected_bytes=%s values=%s",\n            width, height, resolution, unit_scale, len(packed), len(raw), expected, common\n        )\n        _Y1PRO_MAP_DIAG_LOGGED = True\n\n    pieces: dict[int, bytearray] = {}\n'''
+    diag_replacement = '''    if len(raw) > expected:\n        raw = raw[-expected:]\n\n    global _Y1PRO_MAP_DIAG_LOGGED\n    if not _Y1PRO_MAP_DIAG_LOGGED:\n        counts = Counter(raw)\n        common = ",".join(f"{value}:{count}" for value, count in counts.most_common(24))\n        _LOGGER.warning(\n            "Y1PRO_MAP_DIAG width=%s height=%s resolution=%s unit_scale=%s compressed_bytes=%s decoded_bytes=%s expected_bytes=%s values=%s",\n            width, height, resolution, unit_scale, len(packed), len(raw), expected, common\n        )\n        _Y1PRO_MAP_DIAG_LOGGED = True\n\n    pieces: dict[int, bytearray] = {}\n'''
     if diag_marker not in text:
         raise RuntimeError("Could not locate map diagnostic insertion point")
     text = text.replace(diag_marker, diag_replacement, 1)
@@ -149,37 +145,51 @@ def build_profile_170():
     )
 
     old_positions = '''    positions: list[Position] = []\n    pos = data.get("pos")\n    if isinstance(pos, dict):\n        try:\n            positions.append(Position(PositionType.DEEBOT, int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("a", 0))))\n        except Exception:\n            pass\n    map_data = data.get("mapData")\n    if isinstance(map_data, dict):\n        charge = map_data.get("chargePos")\n        if isinstance(charge, dict):\n            try:\n                positions.append(Position(PositionType.CHARGER, int(charge.get("x", 0)), int(charge.get("y", 0)), int(charge.get("a", 0))))\n            except Exception:\n                pass\n        if _emit_y1_raster(event_bus, map_data):\n            handled = True\n'''
-    new_positions = '''    positions: list[Position] = []\n    map_data = data.get("mapData")\n    coord_scale = 1.0\n    if isinstance(map_data, dict):\n        try:\n            map_resolution = float(map_data.get("resolution", 50) or 50)\n            coord_scale = 10.0 if 0 < map_resolution <= 10 else 1.0\n        except Exception:\n            coord_scale = 1.0\n        charge = map_data.get("chargePos")\n        if isinstance(charge, dict):\n            try:\n                positions.append(Position(\n                    PositionType.CHARGER,\n                    int(round(float(charge.get("x", 0)) * coord_scale)),\n                    int(round(float(charge.get("y", 0)) * coord_scale)),\n                    int(charge.get("a", 0)),\n                ))\n            except Exception:\n                pass\n        if _emit_y1_raster(event_bus, map_data):\n            handled = True\n    pos = data.get("pos")\n    if isinstance(pos, dict):\n        try:\n            positions.append(Position(\n                PositionType.DEEBOT,\n                int(round(float(pos.get("x", 0)) * coord_scale)),\n                int(round(float(pos.get("y", 0)) * coord_scale)),\n                int(pos.get("a", 0)),\n            ))\n        except Exception:\n            pass\n'''
+    new_positions = '''    positions: list[Position] = []\n    map_data = data.get("mapData")\n    coord_scale = 1.0\n    if isinstance(map_data, dict):\n        try:\n            map_resolution = float(map_data.get("resolution", 50) or 50)\n            coord_scale = 10.0 if 0 < map_resolution <= 10 else 1.0\n        except Exception:\n            coord_scale = 1.0\n        charge = map_data.get("chargePos")\n        if isinstance(charge, dict):\n            try:\n                positions.append(Position(PositionType.CHARGER, int(round(float(charge.get("x", 0)) * coord_scale)), int(round(float(charge.get("y", 0)) * coord_scale)), int(charge.get("a", 0))))\n            except Exception:\n                pass\n        if _emit_y1_raster(event_bus, map_data):\n            handled = True\n    pos = data.get("pos")\n    if isinstance(pos, dict):\n        try:\n            positions.append(Position(PositionType.DEEBOT, int(round(float(pos.get("x", 0)) * coord_scale)), int(round(float(pos.get("y", 0)) * coord_scale)), int(pos.get("a", 0))))\n        except Exception:\n            pass\n'''
     if old_positions not in text:
         raise RuntimeError("Could not locate position block")
     text = text.replace(old_positions, new_positions, 1)
+
+    old_init = '''    def __init__(self, fields: list[str] | tuple[str, ...]) -> None:\n        self.fields = tuple(str(field) for field in fields)\n        super().__init__({"fields": list(self.fields)})\n'''
+    new_init = '''    def __init__(self, fields: list[str] | tuple[str, ...], is_available_check: bool = False) -> None:\n        self.fields = tuple(str(field) for field in fields)\n        self.is_available_check = bool(is_available_check)\n        super().__init__({"fields": list(self.fields)})\n'''
+    if old_init not in text:
+        raise RuntimeError("Could not locate field-command constructor")
+    text = text.replace(old_init, new_init, 1)
+
+    old_return = '''        return Y1ProStateMessage._handle_body_data_dict(event_bus, data) if isinstance(data, dict) else HandlingResult.analyse()\n'''
+    new_return = '''        if isinstance(data, dict):\n            if self.is_available_check:\n                event_bus.notify(AvailabilityEvent(True))\n            return Y1ProStateMessage._handle_body_data_dict(event_bus, data)\n        return HandlingResult.analyse()\n'''
+    if old_return not in text:
+        raise RuntimeError("Could not locate field-command response return")
+    text = text.replace(old_return, new_return, 1)
+
+    old_availability = '            availability=CapabilityEvent(AvailabilityEvent, []),\n'
+    new_availability = '            availability=CapabilityEvent(AvailabilityEvent, [Y1ProFieldCommand(["battery"], is_available_check=True)]),\n'
+    if old_availability not in text:
+        raise RuntimeError("Could not locate availability capability")
+    text = text.replace(old_availability, new_availability, 1)
 
     dst.write_text(text)
     return dst
 
 
 try:
-    s.PROFILE_PATH = build_profile_170()
+    s.PROFILE_PATH = build_profile_171()
 except Exception as exc:
-    print(f"WARNING: could not build Y1 PRO 1.7.0 profile: {exc}", flush=True)
+    print(f"WARNING: could not build Y1 PRO 1.7.1 profile: {exc}", flush=True)
 
 
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7", "v1.9.8"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.9")
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7", "v1.9.8", "v1.9.9"):
+    s.HTML = s.HTML.replace(old_version, "v2.0.0")
 
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
     '<div class=roomTop><div style="display:none"><select id=roomVacuum><option value=""></option></select></div><div><label>Custom area ID</label>',
 )
-s.HTML = s.HTML.replace(
-    'function selectedVacuum(){return roomVacuum.value||null}',
-    'function selectedVacuum(){return null}',
-)
+s.HTML = s.HTML.replace('function selectedVacuum(){return roomVacuum.value||null}', 'function selectedVacuum(){return null}')
 s.HTML = s.HTML.replace(
     "let current=roomVacuum.value;roomVacuum.innerHTML='';for(let e of (r.vacuum_entities||[])){let op=document.createElement('option');op.value=e.entity_id;op.textContent=(e.attributes&&e.attributes.friendly_name?e.attributes.friendly_name+' - ':'')+e.entity_id;roomVacuum.appendChild(op)}if(current)[...roomVacuum.options].forEach(x=>{if(x.value===current)x.selected=true});let saved=r.rooms||{};",
     "let saved=r.rooms||{};",
 )
-
 s.HTML = s.HTML.replace(
     '<section class="card full"><h2>Output</h2><pre id=o>Ready.</pre></section>',
     '<section class="card full"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Output</h2><button id=copyOutputBtn onclick=copyOutput()>Copy</button></div><pre id=o>Ready.</pre></section>',
@@ -192,8 +202,5 @@ s.HTML = s.HTML.replace(
 if __name__ == "__main__":
     s.SHARE.mkdir(parents=True, exist_ok=True)
     token_state = "available" if supervisor_token() else "missing"
-    print(
-        f"DEEBOT Y1 PRO Diagnostics {VERSION} on :{s.PORT}; HA API token: {token_state}",
-        flush=True,
-    )
+    print(f"DEEBOT Y1 PRO Diagnostics {VERSION} on :{s.PORT}; HA API token: {token_state}", flush=True)
     s.ThreadingHTTPServer(("0.0.0.0", s.PORT), s.Handler).serve_forever()
