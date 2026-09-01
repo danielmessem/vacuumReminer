@@ -121,11 +121,11 @@ def _lz4_decode(src: bytes) -> bytes:
         raise ValueError("truncated LZ4 frame")
     flg = src[4]
     p = 6
-    if flg & 0x08:  # content size
+    if flg & 0x08:
         p += 8
-    if flg & 0x01:  # dictionary id
+    if flg & 0x01:
         p += 4
-    p += 1  # header checksum
+    p += 1
     out = bytearray()
     while True:
         if p + 4 > len(src):
@@ -141,7 +141,7 @@ def _lz4_decode(src: bytes) -> bytes:
         block = src[p:p + block_size]
         p += block_size
         out.extend(block if uncompressed else _lz4_block_decode(block))
-        if flg & 0x10:  # block checksum
+        if flg & 0x10:
             p += 4
     return bytes(out)
 
@@ -160,22 +160,23 @@ def _find_map_blob(map_data: dict[str, Any]) -> str | None:
 
 def _compress_native_map_piece(raw: bytes) -> str:
     """Encode a 100x100 piece in the shortened LZMA form deebot-client expects."""
-    compressed = lzma.compress(raw, format=lzma.FORMAT_ALONE)
+    compressed = bytearray(lzma.compress(raw, format=lzma.FORMAT_ALONE))
     if len(compressed) < 13:
         raise ValueError("unexpected LZMA output")
+    # Python writes an unknown-size marker in the LZMA-alone header. Ecovacs'
+    # shortened form omits bytes 8..11, which deebot-client restores as zeroes.
+    # Write the real little-endian length first so the reconstructed 13-byte
+    # header is valid when the Rust renderer expands it again.
+    compressed[5:13] = len(raw).to_bytes(8, "little")
     shortened = compressed[:8] + compressed[12:]
     return base64.b64encode(shortened).decode()
 
 
 def _pixel_index(value: int) -> int:
-    """Keep common Ecovacs map indices within the renderer's supported palette."""
     if value <= 0:
         return 0
     if value <= 5:
         return value
-    # Newer Ecovacs maps often encode room/floor classes above the base palette.
-    # The native renderer already treats indices >6 as room colors, so preserve a
-    # stable room distinction while constraining the value to its palette range.
     return 6 + ((value - 6) % 6)
 
 
@@ -204,8 +205,6 @@ def _emit_y1_raster(event_bus, map_data: dict[str, Any]) -> bool:
     if len(raw) < expected:
         return False
     if len(raw) > expected:
-        # Some firmware prefixes metadata before the raster. Prefer the final
-        # width*height bytes, which is where Ecovacs map pixels are normally kept.
         raw = raw[-expected:]
 
     pieces: dict[int, bytearray] = {}
@@ -229,8 +228,6 @@ def _emit_y1_raster(event_bus, map_data: dict[str, Any]) -> bool:
             ox = gx % 100
             index = piece_col * 8 + piece_row_from_bottom
             piece = pieces.setdefault(index, bytearray(10000))
-            # BackgroundImage rotates each incoming piece 90 degrees CCW.
-            # Reverse that transform so the Y1 raster lands at (gx, gy).
             input_x = 99 - oy
             input_y = ox
             piece[input_y * 100 + input_x] = value
@@ -455,8 +452,6 @@ def get_device_info() -> StaticDeviceInfo:
                 cached_info=CapabilityEvent(CachedMapInfoEvent, [Y1ProMapCommand({"fields": ["mapInfos"]})]),
                 changed=CapabilityEvent(MapChangedEvent, []),
                 major=None,
-                # A non-None minor capability makes deebot-client subscribe to
-                # MinorMapEvent. Y1 pieces are generated locally from mapData.
                 minor=CapabilityExecute(lambda index, map_id: Y1ProMapCommand({"mapId": str(map_id), "fields": ["mapData"]})),
                 position=CapabilityEvent(PositionsEvent, []),
                 rooms=CapabilityEvent(RoomsEvent, []),
