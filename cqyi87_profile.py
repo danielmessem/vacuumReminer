@@ -36,11 +36,11 @@ from deebot_client.message import HandlingResult, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.9"
+Y1PRO_PATCH_VERSION = "1.5.10"
 
 
 class Y1ProClean(CustomCommand):
-    """Y1 PRO cleaning action using the proven start protocol."""
+    """Y1 PRO cleaning actions using observed official-app protocols."""
 
     def __init__(self, action: CleanAction) -> None:
         if action == CleanAction.START:
@@ -48,6 +48,12 @@ class Y1ProClean(CustomCommand):
                 "40001",
                 {"cleanSwitch": True, "cleanMode": "smart"},
             )
+            return
+        if action == CleanAction.PAUSE:
+            super().__init__("40009", {"pauseSwitch": True})
+            return
+        if action == CleanAction.RESUME:
+            super().__init__("40011", {"pauseSwitch": False})
             return
 
         args: dict[str, Any] = {"act": action.value}
