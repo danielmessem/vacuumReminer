@@ -27,7 +27,7 @@ from deebot_client.messages.json import MESSAGES
 from deebot_client.models import CleanAction, CleanMode, Room, State, StaticDeviceInfo
 from deebot_client.rs.map import PositionType, RotationAngle
 
-Y1PRO_PATCH_VERSION = "1.6.2"
+Y1PRO_PATCH_VERSION = "1.6.3"
 _Y1PRO_PAUSED = False
 _Y1PRO_CHARGE_STATUS: bool | None = None
 
@@ -195,6 +195,32 @@ class Y1ProStateMessage(MessageBodyDataDict):
         return HandlingResult.success() if handled else HandlingResult.analyse()
 
 
+class Y1ProFieldCommand(JsonCommandMqttP2P):
+    """Query observed Y1 PRO fields through numeric command 10001."""
+    NAME = "10001"
+
+    def __init__(self, fields: list[str] | tuple[str, ...]) -> None:
+        self.fields = tuple(str(field) for field in fields)
+        super().__init__({"fields": list(self.fields)})
+
+    @classmethod
+    def create_from_mqtt(cls, payload: str | bytes | bytearray):
+        obj = orjson.loads(payload)
+        data = obj.get("body", {}).get("data", {})
+        fields = data.get("fields", []) if isinstance(data, dict) else []
+        return cls(fields if isinstance(fields, list) else [])
+
+    def _handle_mqtt_p2p(self, event_bus, response: dict[str, Any]) -> None:
+        if not isinstance(response, dict):
+            return
+        body = response.get("body", {})
+        if not isinstance(body, dict) or body.get("code") != 0:
+            return
+        data = body.get("data", {})
+        if isinstance(data, dict):
+            Y1ProStateMessage._handle_body_data_dict(event_bus, data)
+
+
 class Y1ProMapMessage(MessageBodyDataDict):
     NAME = "30001"
 
@@ -205,6 +231,7 @@ class Y1ProMapMessage(MessageBodyDataDict):
 
 MESSAGES["10000"] = Y1ProStateMessage
 MESSAGES["30001"] = Y1ProMapMessage
+COMMANDS_WITH_MQTT_P2P_HANDLING.setdefault(DataType.JSON, {})["10001"] = Y1ProFieldCommand
 COMMANDS_WITH_MQTT_P2P_HANDLING.setdefault(DataType.JSON, {})["30001"] = Y1ProMapCommand
 
 
@@ -214,7 +241,7 @@ def get_device_info() -> StaticDeviceInfo:
         Capabilities(
             device_type=DeviceType.VACUUM,
             availability=CapabilityEvent(AvailabilityEvent, []),
-            battery=CapabilityEvent(BatteryEvent, []),
+            battery=CapabilityEvent(BatteryEvent, [Y1ProFieldCommand(["battery"])]),
             charge=CapabilityExecute(Y1ProCharge),
             clean=CapabilityClean(action=CapabilityCleanAction(command=Y1ProClean, area=Y1ProCleanArea)),
             custom=CapabilityCustomCommand(event=CustomCommandEvent, get=[], set=CustomCommand),
