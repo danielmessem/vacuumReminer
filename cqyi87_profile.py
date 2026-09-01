@@ -32,24 +32,15 @@ from deebot_client.events import (
     StatsEvent,
     TotalStatsEvent,
 )
-from deebot_client.messages import HandlingResult
+from deebot_client.message import HandlingResult, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
-from deebot_client.messages.json.common import MessageBodyDataDict
 from deebot_client.models import CleanAction, CleanMode, State, StaticDeviceInfo
 
-Y1PRO_PATCH_VERSION = "1.5.8"
+Y1PRO_PATCH_VERSION = "1.5.9"
 
 
 class Y1ProClean(CustomCommand):
-    """Y1 PRO cleaning action.
-
-    The official Android app for cqyi87 was observed starting cleaning with
-    numeric command 40001 and body data:
-        {"cleanSwitch": true, "cleanMode": "smart"}
-
-    Only START uses that proven protocol. Other actions remain on the legacy
-    path until their actual Y1 PRO app payloads are captured.
-    """
+    """Y1 PRO cleaning action using the proven start protocol."""
 
     def __init__(self, action: CleanAction) -> None:
         if action == CleanAction.START:
@@ -60,8 +51,6 @@ class Y1ProClean(CustomCommand):
             return
 
         args: dict[str, Any] = {"act": action.value}
-        if action == CleanAction.RESUME:
-            args = {"act": action.value}
         super().__init__("clean", args)
 
 
@@ -78,24 +67,26 @@ class Y1ProStateMessage(MessageBodyDataDict):
     NAME = "10000"
 
     @classmethod
-    async def _handle_body_data_dict(cls, event_bus, data: dict[str, Any]) -> HandlingResult:
-        status = data.get("status")
+    def _handle_body_data_dict(
+        cls, event_bus, data: dict[str, Any]
+    ) -> HandlingResult:
         pause_switch = data.get("pauseSwitch")
+        status = data.get("status")
 
         if pause_switch is True:
             event_bus.notify(StateEvent(State.PAUSED))
-            return HandlingResult.SUCCESS
+            return HandlingResult.success()
 
         if isinstance(status, str):
             normalized = status.lower()
             if normalized == "smartclean":
                 event_bus.notify(StateEvent(State.CLEANING))
-                return HandlingResult.SUCCESS
+                return HandlingResult.success()
             if normalized == "gocharge":
                 event_bus.notify(StateEvent(State.RETURNING))
-                return HandlingResult.SUCCESS
+                return HandlingResult.success()
 
-        return HandlingResult.ANALYSE
+        return HandlingResult.analyse()
 
 
 # Passive registration only: no polling/get commands are added.
@@ -103,7 +94,7 @@ MESSAGES["10000"] = Y1ProStateMessage
 
 
 def get_device_info() -> StaticDeviceInfo:
-    """Return the known-working conservative Y1 PRO profile."""
+    """Return the conservative Y1 PRO profile."""
     return StaticDeviceInfo(
         DataType.JSON,
         Capabilities(
