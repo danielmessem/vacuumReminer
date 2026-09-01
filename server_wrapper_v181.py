@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.8.1.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.1.
 
-Keeps the 1.8.0 server intact while fixing Home Assistant API token discovery
-and simplifying the room mapper UI for a single Y1 PRO.
+Keeps the main diagnostics server intact while fixing Home Assistant API token
+discovery and simplifying the room mapper UI for a single Y1 PRO.
 """
 import json
 import os
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.8.1"
+VERSION = "1.9.1"
 s.VERSION = VERSION
 
 
@@ -70,13 +70,16 @@ def ha_request(path, method="GET", data=None):
         return {"ok": False, "error": s.redact(exc)}
 
 
-# All server functions resolve ha_request through the module global at call time.
 s.ha_request = ha_request
 
-# Keep the room mapper focused on this Y1 PRO. The backend will auto-select when
-# exactly one vacuum exists, and will refuse rather than accidentally command the
-# wrong device if multiple vacuums exist.
-s.HTML = s.HTML.replace("v1.8.0", "v1.8.1")
+# Stamp the actual package version into the UI regardless of the base server's
+# source version.
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.1")
+
+# Keep the room mapper focused on this Y1 PRO. The backend auto-selects when
+# exactly one vacuum exists and refuses rather than commanding the wrong device
+# when multiple vacuums exist.
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
     '<div class=roomTop><div style="display:none"><select id=roomVacuum><option value=""></option></select></div><div><label>Custom area ID</label>',
@@ -93,5 +96,8 @@ s.HTML = s.HTML.replace(
 if __name__ == "__main__":
     s.SHARE.mkdir(parents=True, exist_ok=True)
     token_state = "available" if supervisor_token() else "missing"
-    print(f"DEEBOT Y1 PRO Diagnostics {VERSION} on :{s.PORT}; HA API token: {token_state}", flush=True)
+    print(
+        f"DEEBOT Y1 PRO Diagnostics {VERSION} on :{s.PORT}; HA API token: {token_state}",
+        flush=True,
+    )
     s.ThreadingHTTPServer(("0.0.0.0", s.PORT), s.Handler).serve_forever()
