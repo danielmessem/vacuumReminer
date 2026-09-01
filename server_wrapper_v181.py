@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.8.
+"""Runtime wrapper for DEEBOT Y1 PRO Diagnostics 1.9.9.
 
 Keeps the main diagnostics server intact while fixing Home Assistant API token
 discovery, tightening telemetry redaction, simplifying the room mapper UI,
-adding a copy button for diagnostic output, and generating the Y1 PRO 1.6.6
-profile with corrected map coordinate units.
+adding a copy button for diagnostic output, and generating the Y1 PRO 1.7.0
+profile with improved map cleanup, coordinate alignment, and safe diagnostics.
 """
 import json
 import os
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import server_y1_v160 as s
 
-VERSION = "1.9.8"
+VERSION = "1.9.9"
 s.VERSION = VERSION
 
 
@@ -87,17 +87,29 @@ def redact(value):
 s.redact = redact
 
 
-# Build the 1.6.6 profile from the known-good 1.6.5 source. The Y1 map metadata
-# uses centimetre-scale coordinates when resolution is a small value (observed
-# as 5). deebot-client's native renderer expects millimetres, so 1.6.5 rendered
-# a recognisable map about 10x too small internally, making every raster cell
-# appear huge. Expand those map coordinates by 10 before mapping to the native
-# 50 mm grid. Vacuum command/state protocol is intentionally unchanged.
-def build_scaled_profile():
+def build_profile_170():
+    """Build map-focused 1.7.0 from the known-good 1.6.5 protocol profile."""
     src = Path("/app/cqyi87_profile.py")
-    dst = Path("/app/cqyi87_profile_166.py")
+    dst = Path("/app/cqyi87_profile_170.py")
     text = src.read_text()
-    text = text.replace('Y1PRO_PATCH_VERSION = "1.6.5"', 'Y1PRO_PATCH_VERSION = "1.6.6"', 1)
+
+    text = text.replace(
+        "import base64\nimport lzma\n",
+        "import base64\nfrom collections import Counter\nimport logging\nimport lzma\n",
+        1,
+    )
+    text = text.replace(
+        'Y1PRO_PATCH_VERSION = "1.6.5"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n',
+        'Y1PRO_PATCH_VERSION = "1.7.0"\n_Y1PRO_PAUSED = False\n_Y1PRO_CHARGE_STATUS: bool | None = None\n_Y1PRO_MAP_DIAG_LOGGED = False\n_LOGGER = logging.getLogger(__name__)\n',
+        1,
+    )
+
+    old_pixel = '''def _pixel_index(value: int) -> int:\n    if value <= 0:\n        return 0\n    if value <= 5:\n        return value\n    return 6 + ((value - 6) % 6)\n'''
+    new_pixel = '''def _pixel_index(value: int) -> int:\n    # Y1 values 4/5 render as bright not-scanned/obstacle pixels in the native\n    # palette and were responsible for most of the white speckle/line noise.\n    if value <= 0 or value in (4, 5):\n        return 0\n    if value <= 3:\n        return value\n    return 6 + ((value - 6) % 6)\n'''
+    if old_pixel not in text:
+        raise RuntimeError("Could not locate pixel mapping block")
+    text = text.replace(old_pixel, new_pixel, 1)
+
     marker = '        y_max = float(map_data.get("yMax", 0))\n'
     replacement = (
         marker
@@ -108,25 +120,52 @@ def build_scaled_profile():
     if marker not in text:
         raise RuntimeError("Could not locate Y1 map coordinate block")
     text = text.replace(marker, replacement, 1)
-    old_y = '        y_mm = y_max - (row * resolution)\n'
-    new_y = '        y_mm = (y_max - (row * resolution)) * unit_scale\n'
-    old_x = '            x_mm = x_min + (col * resolution)\n'
-    new_x = '            x_mm = (x_min + (col * resolution)) * unit_scale\n'
-    if old_y not in text or old_x not in text:
-        raise RuntimeError("Could not locate Y1 raster scale formulas")
-    text = text.replace(old_y, new_y, 1).replace(old_x, new_x, 1)
+    text = text.replace(
+        '        y_mm = y_max - (row * resolution)\n',
+        '        y_mm = (y_max - (row * resolution)) * unit_scale\n',
+        1,
+    )
+    text = text.replace(
+        '            x_mm = x_min + (col * resolution)\n',
+        '            x_mm = (x_min + (col * resolution)) * unit_scale\n',
+        1,
+    )
+
+    diag_marker = '''    if len(raw) > expected:\n        raw = raw[-expected:]\n\n    pieces: dict[int, bytearray] = {}\n'''
+    diag_replacement = '''    if len(raw) > expected:\n        raw = raw[-expected:]\n\n    global _Y1PRO_MAP_DIAG_LOGGED\n    if not _Y1PRO_MAP_DIAG_LOGGED:\n        counts = Counter(raw)\n        common = ",".join(f"{value}:{count}" for value, count in counts.most_common(24))\n        _LOGGER.warning(\n            "Y1PRO_MAP_DIAG width=%s height=%s resolution=%s unit_scale=%s "\n            "compressed_bytes=%s decoded_bytes=%s expected_bytes=%s values=%s",\n            width, height, resolution, unit_scale, len(packed), len(raw), expected, common\n        )\n        _Y1PRO_MAP_DIAG_LOGGED = True\n\n    pieces: dict[int, bytearray] = {}\n'''
+    if diag_marker not in text:
+        raise RuntimeError("Could not locate map diagnostic insertion point")
+    text = text.replace(diag_marker, diag_replacement, 1)
+
+    area_marker = '''    if isinstance(data.get("areas"), list) and mid:\n        rooms: list[Room] = []\n'''
+    area_replacement = '''    if isinstance(data.get("areas"), list) and mid:\n        map_meta = data.get("mapData") if isinstance(data.get("mapData"), dict) else {}\n        try:\n            area_resolution = float(map_meta.get("resolution", 50) or 50)\n        except Exception:\n            area_resolution = 50.0\n        area_scale = 10.0 if 0 < area_resolution <= 10 else 1.0\n        rooms: list[Room] = []\n'''
+    if area_marker not in text:
+        raise RuntimeError("Could not locate room block")
+    text = text.replace(area_marker, area_replacement, 1)
+    text = text.replace(
+        '            rooms.append(Room(name=name, id=rid, coordinates=f"{area.get(\'centerX\', 0)},{area.get(\'centerY\', 0)}"))\n',
+        '            try:\n                cx = int(round(float(area.get("centerX", 0)) * area_scale))\n                cy = int(round(float(area.get("centerY", 0)) * area_scale))\n            except Exception:\n                cx = cy = 0\n            rooms.append(Room(name=name, id=rid, coordinates=f"{cx},{cy}"))\n',
+        1,
+    )
+
+    old_positions = '''    positions: list[Position] = []\n    pos = data.get("pos")\n    if isinstance(pos, dict):\n        try:\n            positions.append(Position(PositionType.DEEBOT, int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("a", 0))))\n        except Exception:\n            pass\n    map_data = data.get("mapData")\n    if isinstance(map_data, dict):\n        charge = map_data.get("chargePos")\n        if isinstance(charge, dict):\n            try:\n                positions.append(Position(PositionType.CHARGER, int(charge.get("x", 0)), int(charge.get("y", 0)), int(charge.get("a", 0))))\n            except Exception:\n                pass\n        if _emit_y1_raster(event_bus, map_data):\n            handled = True\n'''
+    new_positions = '''    positions: list[Position] = []\n    map_data = data.get("mapData")\n    coord_scale = 1.0\n    if isinstance(map_data, dict):\n        try:\n            map_resolution = float(map_data.get("resolution", 50) or 50)\n            coord_scale = 10.0 if 0 < map_resolution <= 10 else 1.0\n        except Exception:\n            coord_scale = 1.0\n        charge = map_data.get("chargePos")\n        if isinstance(charge, dict):\n            try:\n                positions.append(Position(\n                    PositionType.CHARGER,\n                    int(round(float(charge.get("x", 0)) * coord_scale)),\n                    int(round(float(charge.get("y", 0)) * coord_scale)),\n                    int(charge.get("a", 0)),\n                ))\n            except Exception:\n                pass\n        if _emit_y1_raster(event_bus, map_data):\n            handled = True\n    pos = data.get("pos")\n    if isinstance(pos, dict):\n        try:\n            positions.append(Position(\n                PositionType.DEEBOT,\n                int(round(float(pos.get("x", 0)) * coord_scale)),\n                int(round(float(pos.get("y", 0)) * coord_scale)),\n                int(pos.get("a", 0)),\n            ))\n        except Exception:\n            pass\n'''
+    if old_positions not in text:
+        raise RuntimeError("Could not locate position block")
+    text = text.replace(old_positions, new_positions, 1)
+
     dst.write_text(text)
     return dst
 
 
 try:
-    s.PROFILE_PATH = build_scaled_profile()
+    s.PROFILE_PATH = build_profile_170()
 except Exception as exc:
-    print(f"WARNING: could not build Y1 PRO 1.6.6 profile: {exc}", flush=True)
+    print(f"WARNING: could not build Y1 PRO 1.7.0 profile: {exc}", flush=True)
 
 
-for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7"):
-    s.HTML = s.HTML.replace(old_version, "v1.9.8")
+for old_version in ("v1.8.0", "v1.8.1", "v1.9.0", "v1.9.1", "v1.9.2", "v1.9.3", "v1.9.4", "v1.9.5", "v1.9.6", "v1.9.7", "v1.9.8"):
+    s.HTML = s.HTML.replace(old_version, "v1.9.9")
 
 s.HTML = s.HTML.replace(
     '<div class=roomTop><div><label>Vacuum</label><select id=roomVacuum><option value="">Loading...</option></select></div><div><label>Custom area ID</label>',
@@ -141,7 +180,6 @@ s.HTML = s.HTML.replace(
     "let saved=r.rooms||{};",
 )
 
-# Add a copy action directly above the shared JSON output panel.
 s.HTML = s.HTML.replace(
     '<section class="card full"><h2>Output</h2><pre id=o>Ready.</pre></section>',
     '<section class="card full"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Output</h2><button id=copyOutputBtn onclick=copyOutput()>Copy</button></div><pre id=o>Ready.</pre></section>',
