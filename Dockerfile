@@ -9,9 +9,10 @@ COPY server_wrapper_v181.py /app/server_wrapper_v181.py
 COPY server_hotfix_v203.py /app/server_hotfix_v203.py
 COPY server_hotfix_v210.py /app/server_hotfix_v210.py
 COPY server_hotfix_v211.py /app/server_hotfix_v211.py
-COPY server_hotfix_v212.py /app/server.py
+COPY server_hotfix_v212.py /app/server_hotfix_v212.py
+COPY server_hotfix_v213.py /app/server.py
 COPY cqyi87_profile.py /app/cqyi87_profile.py
 
-RUN python3 -m py_compile /app/server_y1_v160.py /app/server_wrapper_v181.py /app/server_hotfix_v203.py /app/server_hotfix_v210.py /app/server_hotfix_v211.py /app/server.py /app/cqyi87_profile.py
+RUN python3 -m py_compile /app/server_y1_v160.py /app/server_wrapper_v181.py /app/server_hotfix_v203.py /app/server_hotfix_v210.py /app/server_hotfix_v211.py /app/server_hotfix_v212.py /app/server.py /app/cqyi87_profile.py
 
 CMD ["python3", "/app/server.py"]
