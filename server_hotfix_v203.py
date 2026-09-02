@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Hotfix wrapper for DEEBOT Y1 PRO Diagnostics 2.0.8 / profile 1.7.8."""
+"""Hotfix wrapper for DEEBOT Y1 PRO Diagnostics 2.0.9 / profile 1.7.9."""
 from pathlib import Path
 
 import server_wrapper_v181 as w
 
-VERSION = "2.0.8"
-PROFILE_VERSION = "1.7.8"
+VERSION = "2.0.9"
+PROFILE_VERSION = "1.7.9"
 
 
-def build_profile_178():
-    """Use passive Y1 telemetry for state/battery and avoid broken 10001 polling."""
+def build_profile_179():
+    """Use the official Android-app request dialect for cqyi87 commands."""
     src = Path("/app/cqyi87_profile_172.py")
     if not src.exists():
         src = w.build_profile_172()
-    dst = Path("/app/cqyi87_profile_178.py")
+    dst = Path("/app/cqyi87_profile_179.py")
     text = src.read_text()
 
     # Correct the kw-only AvailabilityEvent constructor in the generated base.
@@ -22,46 +22,83 @@ def build_profile_178():
         "event_bus.notify(AvailabilityEvent(available=True))",
     )
 
-    # Do not use cloud 10001 field reads as an availability test. The Y1 can be
-    # online on MQTT while devmanager returns errno 500 for these requests.
+    # Availability must remain MQTT/event based. A failed field query must never
+    # make a connected Y1 unavailable.
     old_avail = '            availability=CapabilityEvent(AvailabilityEvent, [Y1ProFieldCommand(["battery"], is_available_check=True), Y1ProFieldCommand(["chargeStatus"], is_available_check=True, bootstrap_state=True)]),\n'
     new_avail = '            availability=CapabilityEvent(AvailabilityEvent, []),\n'
     if old_avail not in text:
         raise RuntimeError("Could not locate Y1 availability capability")
     text = text.replace(old_avail, new_avail, 1)
 
-    # State and battery are populated from unsolicited 10000 / buried telemetry.
-    # Active 10001 refreshes are deliberately disabled because this firmware often
-    # returns errno 500 even while the robot is reachable and publishing MQTT.
+    # Restore active bootstrap/refresh now that Y1 commands use the request
+    # envelope captured from the official Android app. The app successfully
+    # queries multiple fields in one 10001 request, so include chargeStatus with
+    # status to distinguish IDLE from DOCKED during state refresh.
     old_battery = '            battery=CapabilityEvent(BatteryEvent, [Y1ProFieldCommand(["battery"])]),\n'
-    new_battery = '            battery=CapabilityEvent(BatteryEvent, []),\n'
+    new_battery = '            battery=CapabilityEvent(BatteryEvent, [Y1ProFieldCommand(["battery"])]),\n'
     if old_battery not in text:
         raise RuntimeError("Could not locate Y1 battery capability")
     text = text.replace(old_battery, new_battery, 1)
 
     old_state = '            state=CapabilityEvent(StateEvent, []),\n'
-    new_state = '            state=CapabilityEvent(StateEvent, []),\n'
+    new_state = '            state=CapabilityEvent(StateEvent, [Y1ProFieldCommand(["status", "chargeStatus"])]),\n'
     if old_state not in text:
         raise RuntimeError("Could not locate Y1 state capability")
     text = text.replace(old_state, new_state, 1)
 
-    # A real state-bearing field response is still explicit proof of reachability
-    # if one arrives from the Ecovacs helper/app path.
+    # A real state-bearing field response is explicit proof of reachability.
     old_block = '''        if isinstance(data, dict):\n            if self.is_available_check:\n                event_bus.notify(AvailabilityEvent(available=True))\n            result = Y1ProStateMessage._handle_body_data_dict(event_bus, data)\n'''
     new_block = '''        if isinstance(data, dict):\n            if any(key in data for key in ("battery", "chargeStatus", "status", "pauseSwitch", "workMode")):\n                event_bus.notify(AvailabilityEvent(available=True))\n            result = Y1ProStateMessage._handle_body_data_dict(event_bus, data)\n'''
     if old_block not in text:
         raise RuntimeError("Could not locate Y1 field response block")
     text = text.replace(old_block, new_block, 1)
 
-    text = text.replace('Y1PRO_PATCH_VERSION = "1.7.2"', 'Y1PRO_PATCH_VERSION = "1.7.8"', 1)
+    text = text.replace('Y1PRO_PATCH_VERSION = "1.7.2"', 'Y1PRO_PATCH_VERSION = "1.7.9"', 1)
 
     # The Y1 broadcasts useful state outside the normal 10000 message too.
-    # Consume the two observed buried-point events before deebot-client logs them
-    # as unknown. This is passive only: no cloud request and no extra MQTT session.
+    # Keep the passive telemetry bridge from 1.7.8 as a second source of truth.
     text += r'''
 
-# --- Y1 PRO passive telemetry bridge (profile 1.7.8) ---
+# --- Y1 PRO Android request dialect + passive telemetry (profile 1.7.9) ---
+import secrets as _y1_secrets
+import time as _y1_time
+from deebot_client.commands.json.common import JsonCommand as _Y1JsonCommand
 from deebot_client.device import Device as _Y1Device
+
+# Official Android app capture for cqyi87 uses m=request, channel=Android,
+# pri=2, ver=0.0.22, millisecond string timestamps and the local timezone.
+# Scope this override strictly to classes defined by this cqyi87 profile.
+if not getattr(_Y1JsonCommand, "_y1pro_android_payload_patch", False):
+    _y1_orig_get_payload = _Y1JsonCommand._get_payload
+
+    def _y1_get_payload(self):
+        cls = self.__class__
+        if cls.__module__ == __name__ and cls.__name__.startswith("Y1Pro"):
+            reqid = _y1_secrets.token_hex(4)
+            payload = {
+                "header": {
+                    "channel": "Android",
+                    "m": "request",
+                    "pri": 2,
+                    "reqid": reqid,
+                    "ts": str(int(_y1_time.time() * 1000)),
+                    "tzc": "Africa/Johannesburg",
+                    "tzm": 120,
+                    "ver": "0.0.22",
+                }
+            }
+            if len(self._args) > 0:
+                payload["body"] = {"data": self._args}
+            _LOGGER.debug(
+                "Y1PRO_ANDROID_REQUEST command=%s header=%s",
+                getattr(self, "NAME", cls.__name__),
+                payload["header"],
+            )
+            return payload
+        return _y1_orig_get_payload(self)
+
+    _Y1JsonCommand._get_payload = _y1_get_payload
+    _Y1JsonCommand._y1pro_android_payload_patch = True
 
 if not getattr(_Y1Device, "_y1pro_passive_telemetry_patch", False):
     _y1_orig_handle_message = _Y1Device._handle_message
@@ -86,11 +123,22 @@ if not getattr(_Y1Device, "_y1pro_passive_telemetry_patch", False):
                         if task_type == "clean":
                             if act in ("start", "resume"):
                                 self.events.notify(StateEvent(State.CLEANING))
-                            elif act in ("pause",):
+                            elif act == "pause":
                                 self.events.notify(StateEvent(State.PAUSED))
                             elif act in ("stop", "finish", "end"):
                                 self.events.notify(StateEvent(State.IDLE))
                             self.events.notify(AvailabilityEvent(available=True))
+                    elif message_name == "onFwBuryPoint-bd_basicinfo":
+                        battery = body.get("battery")
+                        if isinstance(battery, (int, float)) and not isinstance(battery, bool) and 0 <= int(battery) <= 100:
+                            self.events.notify(BatteryEvent(int(battery)))
+                        status = body.get("status")
+                        if isinstance(status, str):
+                            Y1ProStateMessage._handle_body_data_dict(
+                                self.events,
+                                {"status": status, "chargeStatus": body.get("chargeStatus")},
+                            )
+                        self.events.notify(AvailabilityEvent(available=True))
             except Exception:
                 _LOGGER.debug("Y1 passive telemetry parse failed for %s", message_name, exc_info=True)
         return _y1_orig_handle_message(self, message_name, message_data)
@@ -104,13 +152,13 @@ if not getattr(_Y1Device, "_y1pro_passive_telemetry_patch", False):
 
 
 try:
-    w.s.PROFILE_PATH = build_profile_178()
+    w.s.PROFILE_PATH = build_profile_179()
 except Exception as exc:
     print(f"WARNING: could not build Y1 PRO {PROFILE_VERSION} profile: {exc}", flush=True)
 
 w.VERSION = VERSION
 w.s.VERSION = VERSION
-w.s.HTML = w.s.HTML.replace("v2.0.1", "v2.0.8")
+w.s.HTML = w.s.HTML.replace("v2.0.1", "v2.0.9")
 
 if __name__ == "__main__":
     w.s.SHARE.mkdir(parents=True, exist_ok=True)
