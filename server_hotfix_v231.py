@@ -2,9 +2,8 @@
 """DEEBOT Y1 PRO Diagnostics 2.0.31 / profile 1.8.10.
 
 Cleans the Y1 map raster before it is converted to Home Assistant map pieces.
-This removes unsupported raw pixel classes, tiny isolated islands, speckles and
-thin one-pixel spikes while preserving the existing map transform and all robot
-controls/capabilities from profile 1.8.9.
+Builds from the exact generated 1.8.9 profile and uses stable insertion anchors
+instead of matching the historical _pixel_index implementation.
 """
 from pathlib import Path
 
@@ -35,28 +34,18 @@ def build_profile_1810() -> Path:
         "1.8.9 profile marker",
     )
 
-    # The old mapper wrapped every unknown raw byte into one of the visible
-    # renderer palette indexes. That turns protocol/unknown values into black
-    # specks and spikes. Keep only the palette range the renderer understands.
-    old_pixel = '''def _pixel_index(value: int) -> int:
-    if value <= 0:
-        return 0
-    if value <= 5:
-        return value
-    return 6 + ((value - 6) % 6)
-'''
-    new_pixel = '''def _pixel_index(value: int) -> int:
-    """Return only known renderer palette indexes; discard unknown raster bytes."""
-    value = int(value)
-    return value if 1 <= value <= 11 else 0
-
-
-def _clean_y1_raster(raw: bytes, width: int, height: int) -> bytes:
-    """Conservatively remove Y1 raster noise without changing geometry scale."""
+    # Do not replace _pixel_index: its exact implementation has changed across
+    # earlier profile generations. Instead clean the decoded raster immediately
+    # before the existing mapper consumes it. Values are preserved, so existing
+    # palette/room colouring semantics remain unchanged.
+    helper_anchor = '\n\ndef _emit_y1_raster(event_bus, map_data: dict[str, Any]) -> bool:\n'
+    helper = '''\n\ndef _clean_y1_raster(raw: bytes, width: int, height: int) -> bytes:
+    """Conservatively remove isolated Y1 raster noise and tiny islands."""
     size = width * height
-    src = bytearray(_pixel_index(v) for v in raw[:size])
+    src = bytearray(raw[:size])
 
-    def neighbours(buf: bytearray, x: int, y: int):
+    def occupied_neighbours(buf: bytearray, x: int, y: int) -> list[int]:
+        values = []
         for yy in range(max(0, y - 1), min(height, y + 2)):
             base = yy * width
             for xx in range(max(0, x - 1), min(width, x + 2)):
@@ -64,30 +53,28 @@ def _clean_y1_raster(raw: bytes, width: int, height: int) -> bytes:
                     continue
                 value = buf[base + xx]
                 if value:
-                    yield value
+                    values.append(value)
+        return values
 
-    # Two light majority passes remove isolated dots and one-pixel diagonal
-    # spikes. Real floor regions are many pixels thick at the Y1 map scale.
-    for _ in range(2):
-        previous = src[:]
-        for y in range(height):
-            base = y * width
-            for x in range(width):
-                idx = base + x
-                nearby = list(neighbours(previous, x, y))
-                if previous[idx]:
-                    if len(nearby) < 3:
-                        src[idx] = 0
-                elif len(nearby) >= 6:
-                    # Fill a single-cell hole using the dominant surrounding
-                    # palette class rather than inventing a new map class.
-                    counts = {}
-                    for value in nearby:
-                        counts[value] = counts.get(value, 0) + 1
-                    src[idx] = max(counts, key=counts.get)
+    # One conservative pass: remove only near-isolated pixels and fill only a
+    # fully surrounded one-cell hole. This avoids eroding legitimate thin walls.
+    previous = src[:]
+    for y in range(height):
+        base = y * width
+        for x in range(width):
+            idx = base + x
+            nearby = occupied_neighbours(previous, x, y)
+            if previous[idx]:
+                if len(nearby) <= 1:
+                    src[idx] = 0
+            elif len(nearby) == 8:
+                counts = {}
+                for value in nearby:
+                    counts[value] = counts.get(value, 0) + 1
+                src[idx] = max(counts, key=counts.get)
 
-    # Remove very small disconnected islands left after smoothing. At the
-    # observed 50 mm Y1 resolution, 12 pixels is only ~0.03 m^2.
+    # Remove only tiny disconnected islands. Eight-neighbour connectivity keeps
+    # diagonally connected legitimate geometry intact.
     seen = bytearray(size)
     for start in range(size):
         if not src[start] or seen[start]:
@@ -105,26 +92,26 @@ def _clean_y1_raster(raw: bytes, width: int, height: int) -> bytes:
                     if nidx != idx and src[nidx] and not seen[nidx]:
                         seen[nidx] = 1
                         stack.append(nidx)
-        if len(component) < 12:
+        if len(component) < 8:
             for idx in component:
                 src[idx] = 0
 
     return bytes(src)
 '''
-    text = _replace_once(text, old_pixel, new_pixel, "Y1 raster pixel mapping")
+    text = _replace_once(text, helper_anchor, helper + helper_anchor, "Y1 raster renderer")
 
-    old_raw = '''    if len(raw) > expected:
+    raw_anchor = '''    if len(raw) > expected:
         raw = raw[-expected:]
 
     pieces: dict[int, bytearray] = {}
 '''
-    new_raw = '''    if len(raw) > expected:
+    raw_replacement = '''    if len(raw) > expected:
         raw = raw[-expected:]
     raw = _clean_y1_raster(raw, width, height)
 
     pieces: dict[int, bytearray] = {}
 '''
-    text = _replace_once(text, old_raw, new_raw, "Y1 raster cleanup insertion point")
+    text = _replace_once(text, raw_anchor, raw_replacement, "Y1 raster cleanup insertion point")
 
     compile(text, str(dst), "exec")
     dst.write_text(text)
@@ -151,9 +138,9 @@ def diagnose_231():
     result["version"] = VERSION
     result["y1pro_map_cleanup"] = {
         "profile": PROFILE_VERSION,
-        "unknown_pixels": "discarded",
-        "smoothing_passes": 2,
-        "minimum_island_pixels": 12,
+        "smoothing_passes": 1,
+        "minimum_island_pixels": 8,
+        "palette_mapping_changed": False,
         "map_transform_changed": False,
         "build_error": _PROFILE_BUILD_ERROR,
     }
