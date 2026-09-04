@@ -2,8 +2,7 @@
 """DEEBOT Y1 PRO Diagnostics 2.0.31 / profile 1.8.10.
 
 Cleans the Y1 map raster before it is converted to Home Assistant map pieces.
-Builds from the exact generated 1.8.9 profile and uses stable insertion anchors
-instead of matching the historical _pixel_index implementation.
+Builds from the exact generated 1.8.9 profile and patches only stable anchors.
 """
 from pathlib import Path
 
@@ -34,10 +33,6 @@ def build_profile_1810() -> Path:
         "1.8.9 profile marker",
     )
 
-    # Do not replace _pixel_index: its exact implementation has changed across
-    # earlier profile generations. Instead clean the decoded raster immediately
-    # before the existing mapper consumes it. Values are preserved, so existing
-    # palette/room colouring semantics remain unchanged.
     helper_anchor = '\n\ndef _emit_y1_raster(event_bus, map_data: dict[str, Any]) -> bool:\n'
     helper = '''\n\ndef _clean_y1_raster(raw: bytes, width: int, height: int) -> bytes:
     """Conservatively remove isolated Y1 raster noise and tiny islands."""
@@ -56,8 +51,6 @@ def build_profile_1810() -> Path:
                     values.append(value)
         return values
 
-    # One conservative pass: remove only near-isolated pixels and fill only a
-    # fully surrounded one-cell hole. This avoids eroding legitimate thin walls.
     previous = src[:]
     for y in range(height):
         base = y * width
@@ -73,8 +66,6 @@ def build_profile_1810() -> Path:
                     counts[value] = counts.get(value, 0) + 1
                 src[idx] = max(counts, key=counts.get)
 
-    # Remove only tiny disconnected islands. Eight-neighbour connectivity keeps
-    # diagonally connected legitimate geometry intact.
     seen = bytearray(size)
     for start in range(size):
         if not src[start] or seen[start]:
@@ -100,18 +91,11 @@ def build_profile_1810() -> Path:
 '''
     text = _replace_once(text, helper_anchor, helper + helper_anchor, "Y1 raster renderer")
 
-    raw_anchor = '''    if len(raw) > expected:
-        raw = raw[-expected:]
-
-    pieces: dict[int, bytearray] = {}
-'''
-    raw_replacement = '''    if len(raw) > expected:
-        raw = raw[-expected:]
-    raw = _clean_y1_raster(raw, width, height)
-
-    pieces: dict[int, bytearray] = {}
-'''
-    text = _replace_once(text, raw_anchor, raw_replacement, "Y1 raster cleanup insertion point")
+    # Patch the most stable decode line rather than matching surrounding whitespace
+    # or later length-normalisation code, which changed between generated profiles.
+    decode_anchor = '        raw = _lz4_decode(packed)\n'
+    decode_replacement = '        raw = _clean_y1_raster(_lz4_decode(packed), width, height)\n'
+    text = _replace_once(text, decode_anchor, decode_replacement, "Y1 raster decode")
 
     compile(text, str(dst), "exec")
     dst.write_text(text)
