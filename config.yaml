@@ -1,5 +1,5 @@
 name: DEEBOT Y1 PRO Diagnostics
-version: "2.0.40"
+version: "2.0.41"
 slug: deebot_y1_pro_diagnostics
 description: Diagnostic and recovery toolkit for DEEBOT Y1 PRO and Home Assistant Ecovacs integrations
 url: https://github.com/danielmessem/vacuumReminer
