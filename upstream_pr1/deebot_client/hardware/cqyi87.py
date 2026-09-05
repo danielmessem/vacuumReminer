@@ -1,10 +1,4 @@
-"""DEEBOT Y1 PRO capabilities.
-
-Candidate upstream implementation for device class cqyi87.
-This first slice intentionally contains only the protocol needed for discovery,
-core vacuum controls, battery and state. Map support is kept for a follow-up
-change so the upstream review stays small.
-"""
+"""DEEBOT Y1 PRO (cqyi87) capabilities candidate."""
 
 from __future__ import annotations
 
@@ -19,6 +13,9 @@ from deebot_client.capabilities import (
     CapabilityCustomCommand,
     CapabilityEvent,
     CapabilityExecute,
+    CapabilityLifeSpan,
+    CapabilitySettings,
+    CapabilityStats,
     DeviceType,
 )
 from deebot_client.commands import COMMANDS_WITH_MQTT_P2P_HANDLING
@@ -29,7 +26,13 @@ from deebot_client.events import (
     AvailabilityEvent,
     BatteryEvent,
     CustomCommandEvent,
+    ErrorEvent,
+    LifeSpanEvent,
+    NetworkInfoEvent,
+    ReportStatsEvent,
     StateEvent,
+    StatsEvent,
+    TotalStatsEvent,
 )
 from deebot_client.message import HandlingResult, HandlingState, MessageBodyDataDict
 from deebot_client.messages.json import MESSAGES
@@ -40,7 +43,7 @@ _charge_status: bool | None = None
 
 
 class Y1ProClean(CustomCommand):
-    """Control cleaning with the numeric protocol used by cqyi87."""
+    """Control cleaning with the numeric cqyi87 protocol."""
 
     def __init__(self, action: CleanAction) -> None:
         if action == CleanAction.START:
@@ -83,6 +86,15 @@ class Y1ProCharge(CustomCommand):
 
     def __init__(self) -> None:
         super().__init__("40013", {"chargeSwitch": True})
+
+
+class Y1ProUnsupportedLifeSpanReset(CustomCommand):
+    """Reject consumable reset until its cqyi87 protocol is verified."""
+
+    def __init__(self, _life_span) -> None:
+        # This constructor is required by CapabilityLifeSpan. It is deliberately
+        # not exposed with any supported types in PR1.
+        super().__init__("cqyi87UnsupportedLifeSpanReset", {})
 
 
 class Y1ProStateMessage(MessageBodyDataDict):
@@ -140,9 +152,7 @@ class Y1ProStateMessage(MessageBodyDataDict):
             if status == "idle":
                 _paused = False
                 event_bus.notify(
-                    StateEvent(
-                        State.DOCKED if _charge_status is True else State.IDLE
-                    )
+                    StateEvent(State.DOCKED if _charge_status is True else State.IDLE)
                 )
                 return HandlingResult.success()
 
@@ -150,7 +160,7 @@ class Y1ProStateMessage(MessageBodyDataDict):
 
 
 class Y1ProFieldCommand(JsonCommandMqttP2P):
-    """Query cqyi87 fields using numeric command 10001."""
+    """Query observed Y1 PRO fields through numeric command 10001."""
 
     NAME = "10001"
 
@@ -199,7 +209,6 @@ class Y1ProFieldCommand(JsonCommandMqttP2P):
         self._handle_field_data(event_bus, response)
 
 
-# cqyi87 publishes state with numeric names instead of the legacy JSON names.
 MESSAGES["10000"] = Y1ProStateMessage
 COMMANDS_WITH_MQTT_P2P_HANDLING.setdefault(DataType.JSON, {})[
     "10001"
@@ -207,17 +216,13 @@ COMMANDS_WITH_MQTT_P2P_HANDLING.setdefault(DataType.JSON, {})[
 
 
 def get_device_info() -> StaticDeviceInfo:
-    """Get static device information for the DEEBOT Y1 PRO (cqyi87)."""
+    """Get device info for DEEBOT Y1 PRO class cqyi87."""
     return StaticDeviceInfo(
         DataType.JSON,
         Capabilities(
             device_type=DeviceType.VACUUM,
-            # Incoming MQTT traffic proves reachability. An empty refresh list is
-            # intentional because cqyi87 does not implement legacy getBattery.
             availability=CapabilityEvent(AvailabilityEvent, []),
-            battery=CapabilityEvent(
-                BatteryEvent, [Y1ProFieldCommand(["battery"])]
-            ),
+            battery=CapabilityEvent(BatteryEvent, [Y1ProFieldCommand(["battery"])]),
             charge=CapabilityExecute(Y1ProCharge),
             clean=CapabilityClean(
                 action=CapabilityCleanAction(
@@ -226,10 +231,26 @@ def get_device_info() -> StaticDeviceInfo:
                 )
             ),
             custom=CapabilityCustomCommand(
-                event=CustomCommandEvent,
-                get=[],
-                set=CustomCommand,
+                event=CustomCommandEvent, get=[], set=CustomCommand
             ),
+            # Required by the current Capabilities API. Unknown/unverified Y1
+            # protocols are represented by empty event command lists rather than
+            # borrowing legacy commands from unrelated models.
+            error=CapabilityEvent(ErrorEvent, []),
+            life_span=CapabilityLifeSpan(
+                event=LifeSpanEvent,
+                get=[],
+                reset=Y1ProUnsupportedLifeSpanReset,
+                types=(),
+            ),
+            network=CapabilityEvent(NetworkInfoEvent, []),
+            play_sound=CapabilityExecute(lambda: CustomCommand("playSound", {})),
+            settings=CapabilitySettings(),
             state=CapabilityEvent(StateEvent, []),
+            stats=CapabilityStats(
+                clean=CapabilityEvent(StatsEvent, []),
+                report=CapabilityEvent(ReportStatsEvent, []),
+                total=CapabilityEvent(TotalStatsEvent, []),
+            ),
         ),
     )
