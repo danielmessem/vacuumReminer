@@ -1,0 +1,9 @@
+{
+  "domain": "y1_pro_eta",
+  "name": "Y1 PRO Whole-house Clean ETA",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/danielmessem/vacuumReminer",
+  "iot_class": "calculated",
+  "version": "0.1.0"
+}
