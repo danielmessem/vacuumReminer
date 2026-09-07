@@ -1,0 +1,12 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Whole-house clean ETA",
+        "description": "Choose the Y1 PRO vacuum to track.",
+        "data": {"vacuum_entity": "Vacuum"}
+      }
+    },
+    "abort": {"already_configured": "This vacuum is already being tracked."}
+  }
+}
