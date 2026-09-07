@@ -7,8 +7,10 @@ from datetime import datetime
 from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorEntityDescription
-from homeassistant.const import UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfTime
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import Y1ProEtaConfigEntry
@@ -23,6 +25,13 @@ class EtaSensorDescription(SensorEntityDescription):
 
 
 DESCRIPTIONS = (
+    EtaSensorDescription(
+        key="percent_complete", name="Whole-house clean complete",
+        native_unit_of_measurement=PERCENTAGE, icon="mdi:progress-clock",
+        value_fn=lambda tracker: min(
+            100, tracker.elapsed_seconds() / tracker.estimated_total_seconds * 100
+        ) if tracker.started_at and tracker.estimated_total_seconds else None,
+    ),
     EtaSensorDescription(
         key="remaining", name="Whole-house clean time left",
         device_class=SensorDeviceClass.DURATION,
@@ -62,7 +71,23 @@ async def async_setup_entry(
     hass, entry: Y1ProEtaConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Set up ETA sensors."""
-    async_add_entities(EtaSensor(entry, description) for description in DESCRIPTIONS)
+    device_info = None
+    source = er.async_get(hass).async_get(entry.runtime_data.entity_id)
+    if source and source.device_id:
+        source_device = dr.async_get(hass).async_get(source.device_id)
+        if source_device:
+            # Reuse the Ecovacs identifiers so HA groups these calculated
+            # entities on the existing vacuum device page.
+            device_info = DeviceInfo(
+                identifiers=source_device.identifiers,
+                connections=source_device.connections,
+                name=source_device.name,
+                manufacturer=source_device.manufacturer,
+                model=source_device.model,
+            )
+    async_add_entities(
+        EtaSensor(entry, description, device_info) for description in DESCRIPTIONS
+    )
 
 
 class EtaSensor(SensorEntity):
@@ -70,11 +95,16 @@ class EtaSensor(SensorEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, entry: Y1ProEtaConfigEntry, description: EtaSensorDescription) -> None:
+    def __init__(
+        self,
+        entry: Y1ProEtaConfigEntry,
+        description: EtaSensorDescription,
+        device_info: DeviceInfo | None,
+    ) -> None:
         self.entity_description = description
         self._tracker = entry.runtime_data
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
+        self._attr_device_info = device_info or {
             "identifiers": {("y1_pro_eta", entry.entry_id)},
             "name": "Beepbop whole-house ETA",
             "manufacturer": "Community",
