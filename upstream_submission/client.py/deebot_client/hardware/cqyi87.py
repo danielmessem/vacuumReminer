@@ -10,7 +10,6 @@ from deebot_client.capabilities import (
     CapabilityEvent,
     CapabilityExecute,
     CapabilityLifeSpan,
-    CapabilityMap,
     CapabilitySettings,
     CapabilityStats,
     DeviceType,
@@ -21,14 +20,10 @@ from deebot_client.const import DataType
 from deebot_client.events import (
     AvailabilityEvent,
     BatteryEvent,
-    CachedMapInfoEvent,
     CustomCommandEvent,
+    LifeSpan,
     LifeSpanEvent,
-    MapChangedEvent,
-    MapTraceEvent,
-    PositionsEvent,
     ReportStatsEvent,
-    RoomsEvent,
     StateEvent,
     StatsEvent,
     TotalStatsEvent,
@@ -36,19 +31,22 @@ from deebot_client.events import (
 from deebot_client.models import StaticDeviceInfo
 
 
-def get_device_info() -> StaticDeviceInfo:
-    """Get capabilities for DEEBOT Y1 PRO class cqyi87.
+def _unsupported_life_span_reset(component: LifeSpan):
+    """Refuse to send a consumable reset until its Y1 protocol is verified."""
+    raise NotImplementedError(f"Y1 PRO consumable reset is not mapped: {component}")
 
-    PR1 intentionally limits itself to discovery, core clean/dock controls,
-    battery/state and current-clean stats. Map translation and consumables are
-    follow-up work so this initial change remains reviewable.
+
+def get_device_info() -> StaticDeviceInfo:
+    """Get PR1 capabilities for DEEBOT Y1 PRO class cqyi87.
+
+    This first upstream slice intentionally covers device discovery, core clean
+    and dock controls, battery/state and current-clean statistics only. Map,
+    consumables and optional settings are separate follow-up changes.
     """
     return StaticDeviceInfo(
         DataType.JSON,
         Capabilities(
             device_type=DeviceType.VACUUM,
-            # Keep the library's existing empty availability behavior. The local
-            # working profile has remained available for hours with this setup.
             availability=CapabilityEvent(AvailabilityEvent, []),
             battery=CapabilityEvent(BatteryEvent, [Y1FieldQuery(["battery"])]),
             charge=CapabilityExecute(Y1Charge),
@@ -58,30 +56,18 @@ def get_device_info() -> StaticDeviceInfo:
             custom=CapabilityCustomCommand(
                 event=CustomCommandEvent, get=[], set=CustomCommand
             ),
+            # These base Capabilities fields are currently non-optional in
+            # client.py, although several local/legacy profiles use None for
+            # unsupported features. Keep unsupported Y1 features inert in PR1.
             error=None,
             fan_speed=None,
             life_span=CapabilityLifeSpan(
                 event=LifeSpanEvent,
                 get=[],
-                reset=lambda component: (_ for _ in ()).throw(
-                    NotImplementedError(
-                        f"Y1 PRO consumable reset is not mapped: {component}"
-                    )
-                ),
+                reset=_unsupported_life_span_reset,
                 types=(),
             ),
-            map=CapabilityMap(
-                cached_info=CapabilityEvent(CachedMapInfoEvent, []),
-                changed=CapabilityEvent(MapChangedEvent, []),
-                major=None,
-                minor=None,
-                multi_state=None,
-                position=CapabilityEvent(PositionsEvent, []),
-                relocation=None,
-                rooms=CapabilityEvent(RoomsEvent, []),
-                set=None,
-                trace=CapabilityEvent(MapTraceEvent, []),
-            ),
+            map=None,
             network=None,
             play_sound=None,
             settings=CapabilitySettings(),
