@@ -4,6 +4,7 @@ from unittest.mock import Mock, call
 
 from deebot_client.event_bus import EventBus
 from deebot_client.events import BatteryEvent, StateEvent, StatsEvent
+from deebot_client.message import HandlingState
 from deebot_client.messages.json.y1 import handle_y1_state_data
 from deebot_client.models import State
 
@@ -11,7 +12,7 @@ from deebot_client.models import State
 def test_y1_partial_battery_update() -> None:
     event_bus = Mock(spec_set=EventBus)
     result = handle_y1_state_data(event_bus, {"battery": 83})
-    assert result.is_success
+    assert result.state == HandlingState.SUCCESS
     event_bus.notify.assert_called_once_with(BatteryEvent(83))
 
 
