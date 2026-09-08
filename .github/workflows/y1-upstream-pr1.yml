@@ -9,6 +9,10 @@ on:
       - ".github/workflows/y1-upstream-pr1.yml"
   workflow_dispatch:
 
+concurrency:
+  group: y1-upstream-pr1-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -49,13 +53,15 @@ jobs:
             deebot_client/messages/json/y1.py \
             deebot_client/hardware/cqyi87.py \
             tests/commands/json/test_y1.py \
-            tests/messages/json/test_y1.py
+            tests/messages/json/test_y1.py \
+            tests/test_y1_hardware.py
           uv run ruff format --check \
             deebot_client/commands/json/y1.py \
             deebot_client/messages/json/y1.py \
             deebot_client/hardware/cqyi87.py \
             tests/commands/json/test_y1.py \
-            tests/messages/json/test_y1.py
+            tests/messages/json/test_y1.py \
+            tests/test_y1_hardware.py
 
       - name: Mypy staged library code
         working-directory: upstream
@@ -67,4 +73,4 @@ jobs:
 
       - name: Run targeted Y1 tests
         working-directory: upstream
-        run: uv run pytest tests/commands/json/test_y1.py tests/messages/json/test_y1.py -v
+        run: uv run pytest tests/commands/json/test_y1.py tests/messages/json/test_y1.py tests/test_y1_hardware.py -v
