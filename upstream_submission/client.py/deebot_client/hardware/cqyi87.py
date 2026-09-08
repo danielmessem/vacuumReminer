@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from deebot_client.capabilities import (
     Capabilities,
     CapabilityClean,
@@ -15,7 +17,7 @@ from deebot_client.capabilities import (
     DeviceType,
 )
 from deebot_client.commands.json.custom import CustomCommand
-from deebot_client.commands.json.y1 import Y1Charge, Y1Clean, Y1CleanArea, Y1FieldQuery
+from deebot_client.commands.json.y1 import Y1Charge, Y1CleanArea, Y1FieldQuery, y1_clean
 from deebot_client.const import DataType
 from deebot_client.events import (
     AvailabilityEvent,
@@ -31,9 +33,10 @@ from deebot_client.events import (
 from deebot_client.models import StaticDeviceInfo
 
 
-def _unsupported_life_span_reset(component: LifeSpan):
+def _unsupported_life_span_reset(component: LifeSpan) -> NoReturn:
     """Refuse to send a consumable reset until its Y1 protocol is verified."""
-    raise NotImplementedError(f"Y1 PRO consumable reset is not mapped: {component}")
+    message = f"Y1 PRO consumable reset is not mapped: {component}"
+    raise NotImplementedError(message)
 
 
 def get_device_info() -> StaticDeviceInfo:
@@ -51,7 +54,7 @@ def get_device_info() -> StaticDeviceInfo:
             battery=CapabilityEvent(BatteryEvent, [Y1FieldQuery(["battery"])]),
             charge=CapabilityExecute(Y1Charge),
             clean=CapabilityClean(
-                action=CapabilityCleanAction(command=Y1Clean, area=Y1CleanArea),
+                action=CapabilityCleanAction(command=y1_clean, area=Y1CleanArea),
             ),
             custom=CapabilityCustomCommand(
                 event=CustomCommandEvent, get=[], set=CustomCommand
