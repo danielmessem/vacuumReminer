@@ -5,10 +5,11 @@ Drafted for upstream review against DeebotUniverse/client.py dev.
 
 from __future__ import annotations
 
-from datetime import datetime
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
+
+import orjson
 
 from deebot_client.commands.json.common import ExecuteCommand, JsonCommandMqttP2P
 from deebot_client.message import HandlingResult, HandlingState
@@ -18,23 +19,18 @@ if TYPE_CHECKING:
     from deebot_client.event_bus import EventBus
 
 
-class _Y1AndroidPayload:
-    """Use the request envelope captured from the Ecovacs Android app."""
+class _Y1NumericPayload:
+    """Build the cqyi87 numeric request envelope observed from the Ecovacs app."""
 
     def _get_payload(self) -> dict[str, Any]:
-        now = datetime.now().astimezone()
-        offset = now.utcoffset()
-        offset_minutes = int(offset.total_seconds() // 60) if offset else 0
         payload: dict[str, Any] = {
             "header": {
-                "channel": "Android",
-                "m": "request",
-                "pri": 2,
+                "channel": "rop",
+                "m": "cloudctl",
+                "pri": 3,
                 "reqid": secrets.token_hex(4),
                 "ts": str(int(time.time() * 1000)),
-                "tzc": str(now.tzinfo or "UTC"),
-                "tzm": offset_minutes,
-                "ver": "0.0.22",
+                "ver": "0.0.1",
             }
         }
         if self._args:
@@ -42,8 +38,8 @@ class _Y1AndroidPayload:
         return payload
 
 
-class _Y1Execute(_Y1AndroidPayload, ExecuteCommand, JsonCommandMqttP2P):
-    """Base for Y1 commands which can receive MQTT P2P acknowledgements."""
+class _Y1Execute(_Y1NumericPayload, ExecuteCommand, JsonCommandMqttP2P):
+    """Base for Y1 execute commands which may receive MQTT P2P acknowledgements."""
 
     @classmethod
     def create_from_mqtt(cls, payload: str | bytes | bytearray):
@@ -94,7 +90,7 @@ class Y1CleanArea(_Y1Execute):
     ) -> None:
         # `mode` is accepted to match CapabilityCleanAction.area's callable
         # signature. The observed Y1 wire protocol is room-ID based.
-        _ = mode
+        del mode
         if cleanings != 1:
             raise NotImplementedError("Repeated Y1 PRO room cleaning is not verified")
         super().__init__(
@@ -123,22 +119,23 @@ class Y1Charge(_Y1Execute):
         return cls()
 
 
-class Y1FieldQuery(_Y1AndroidPayload, JsonCommandMqttP2P):
+class Y1FieldQuery(_Y1NumericPayload, JsonCommandMqttP2P):
     """Read fields through the Y1 10001 query."""
 
     NAME = "10001"
 
-    def __init__(self, fields: list[str], *, is_available_check: bool = False) -> None:
-        super().__init__({"fields": fields})
+    def __init__(
+        self, fields: list[str] | tuple[str, ...], *, is_available_check: bool = False
+    ) -> None:
+        self.fields = tuple(str(field) for field in fields)
+        super().__init__({"fields": list(self.fields)})
         self._is_available_check = is_available_check
 
     @classmethod
     def create_from_mqtt(cls, payload: str | bytes | bytearray):
-        import orjson
-
         data = orjson.loads(payload).get("body", {}).get("data", {})
         fields = data.get("fields", []) if isinstance(data, dict) else []
-        return cls(list(fields) if isinstance(fields, list) else [])
+        return cls(fields if isinstance(fields, list) else [])
 
     def _handle_response(
         self, event_bus: EventBus, response: dict[str, Any]
@@ -149,7 +146,13 @@ class Y1FieldQuery(_Y1AndroidPayload, JsonCommandMqttP2P):
         return self._handle_field_data(event_bus, data)
 
     def _handle_field_data(self, event_bus: EventBus, value: Any) -> HandlingResult:
-        from deebot_client.messages.json.y1 import handle_y1_state_data
+        from deebot_client.messages.json.y1 import handle_y1_state_data  # noqa: PLC0415
+
+        if isinstance(value, (str, bytes, bytearray)):
+            try:
+                value = orjson.loads(value)
+            except Exception:
+                return HandlingResult.analyse()
 
         if isinstance(value, dict) and "body" in value:
             body = value.get("body", {})
