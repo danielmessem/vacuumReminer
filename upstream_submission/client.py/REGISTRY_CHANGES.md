@@ -1,18 +1,36 @@
 # Required registry changes for PR1
 
-The current `client.py` `dev` branch builds MQTT P2P command routing from the JSON command registry. Therefore the Y1 classes should be registered through the normal package lists, not by mutating global dictionaries from `hardware/cqyi87.py`.
+The current `client.py` `dev` branch builds MQTT P2P routing from the normal JSON command registry. The upstream Y1 implementation therefore registers fixed-name command classes normally instead of mutating global dictionaries from `hardware/cqyi87.py`.
 
 ## `deebot_client/commands/json/__init__.py`
 
-Add:
+Import the fixed numeric command classes:
 
 ```python
-from .y1 import Y1Charge, Y1Clean, Y1CleanArea, Y1FieldQuery
+from .y1 import (
+    Y1Charge,
+    Y1CleanArea,
+    Y1FieldQuery,
+    Y1PauseClean,
+    Y1ResumeClean,
+    Y1StartClean,
+)
 ```
 
-Add `Y1FieldQuery` to `_COMMANDS`. `Y1Clean`, `Y1CleanArea` and `Y1Charge` use different numeric names per action/instance, so they should not be used as generic incoming-command factories unless the upstream maintainers want explicit classes for each numeric command. The hardware profile can still instantiate them directly.
+Add all six to `_COMMANDS`:
 
-The important routing requirement for PR1 is command `10001`: it must appear in `COMMANDS`, which automatically places it in `COMMANDS_WITH_MQTT_P2P_HANDLING` because it subclasses `CommandMqttP2P`.
+```python
+    Y1StartClean,
+    Y1CleanArea,
+    Y1PauseClean,
+    Y1ResumeClean,
+    Y1Charge,
+    Y1FieldQuery,
+```
+
+This produces normal registry entries for `40001`, `40007`, `40009`, `40011`, `40013`, and `10001`. Because each class subclasses `CommandMqttP2P`, `deebot_client.commands.COMMANDS_WITH_MQTT_P2P_HANDLING` is populated automatically by the existing library code.
+
+`Y1Clean(action)` is intentionally a factory used only by the hardware capability. It dispatches a `CleanAction` to one of the fixed-name command classes, so the command registry never depends on an instance mutating its `NAME`.
 
 ## `deebot_client/messages/json/__init__.py`
 
@@ -22,8 +40,12 @@ Add:
 from .y1 import OnY1State
 ```
 
-Add `OnY1State` to `_MESSAGES`, which registers message `10000` through the normal message registry.
+Add `OnY1State` to `_MESSAGES`. This registers message `10000` through the normal message registry.
 
-## Why this differs from the local patch
+## `deebot_client/hardware/cqyi87.py`
 
-The working local profile directly modifies `MESSAGES` and `COMMANDS_WITH_MQTT_P2P_HANDLING`. That was appropriate for a runtime patch because no package source files could be changed. It is not the preferred upstream architecture. The upstream submission should use the package registries so the new protocol is imported, typed, tested and discoverable in the same way as existing commands/messages.
+No global registry mutation is required. The hardware profile only wires capabilities to the Y1 command/message/event implementation.
+
+## Why this differs from the local runtime patch
+
+The working Home Assistant patch directly modifies `MESSAGES` and `COMMANDS_WITH_MQTT_P2P_HANDLING` because it is injected into an already-installed `deebot-client`. That mechanism should not be submitted upstream. In package source, normal registries are cleaner, typed, testable, and automatically participate in MQTT P2P routing.
