@@ -30,12 +30,8 @@ def handle_y1_state_data(event_bus: EventBus, data: dict[str, Any]) -> HandlingR
 
     clean_area = data.get("cleanArea")
     clean_time = data.get("cleanTime")
-    if (
-        isinstance(clean_area, (int, float))
-        and not isinstance(clean_area, bool)
-    ) or (
-        isinstance(clean_time, (int, float))
-        and not isinstance(clean_time, bool)
+    if (isinstance(clean_area, (int, float)) and not isinstance(clean_area, bool)) or (
+        isinstance(clean_time, (int, float)) and not isinstance(clean_time, bool)
     ):
         event_bus.notify(
             StatsEvent(
