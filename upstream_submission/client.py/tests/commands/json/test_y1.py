@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 import pytest
 
-from deebot_client.commands.json.y1 import Y1Charge, Y1Clean, Y1CleanArea, Y1FieldQuery
+from deebot_client.commands.json.y1 import Y1Charge, Y1CleanArea, Y1FieldQuery, y1_clean
 from deebot_client.models import CleanAction, CleanMode
 
 
-def _body_data(command):
+class PayloadCommand(Protocol):
+    """Command exposing the JSON payload builder used by these tests."""
+
+    def _get_payload(self) -> dict[str, Any]: ...
+
+
+def _body_data(command: PayloadCommand) -> dict[str, Any]:
     payload = command._get_payload()
     assert payload["header"]["channel"] == "rop"
     assert payload["header"]["m"] == "cloudctl"
@@ -18,26 +26,26 @@ def _body_data(command):
 
 
 def test_y1_start_payload() -> None:
-    command = Y1Clean(CleanAction.START)
+    command = y1_clean(CleanAction.START)
     assert command.NAME == "40001"
     assert _body_data(command) == {"cleanSwitch": True, "cleanMode": "smart"}
 
 
 def test_y1_pause_payload() -> None:
-    command = Y1Clean(CleanAction.PAUSE)
+    command = y1_clean(CleanAction.PAUSE)
     assert command.NAME == "40009"
     assert _body_data(command) == {"pauseSwitch": True}
 
 
 def test_y1_resume_payload() -> None:
-    command = Y1Clean(CleanAction.RESUME)
+    command = y1_clean(CleanAction.RESUME)
     assert command.NAME == "40011"
     assert _body_data(command) == {"pauseSwitch": False}
 
 
 def test_y1_stop_not_invented() -> None:
     with pytest.raises(NotImplementedError):
-        Y1Clean(CleanAction.STOP)
+        y1_clean(CleanAction.STOP)
 
 
 def test_y1_area_payload() -> None:
