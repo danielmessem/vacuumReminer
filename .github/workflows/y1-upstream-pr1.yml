@@ -37,6 +37,8 @@ jobs:
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
 
       - name: Overlay staged cqyi87 PR1
         run: python staging/upstream_submission/client.py/apply_to_upstream.py upstream
@@ -48,14 +50,14 @@ jobs:
       - name: Ruff check staged Python
         working-directory: upstream
         run: |
-          uv run ruff check \
+          uvx ruff check \
             deebot_client/commands/json/y1.py \
             deebot_client/messages/json/y1.py \
             deebot_client/hardware/cqyi87.py \
             tests/commands/json/test_y1.py \
             tests/messages/json/test_y1.py \
             tests/test_y1_hardware.py
-          uv run ruff format --check \
+          uvx ruff format --check \
             deebot_client/commands/json/y1.py \
             deebot_client/messages/json/y1.py \
             deebot_client/hardware/cqyi87.py \
