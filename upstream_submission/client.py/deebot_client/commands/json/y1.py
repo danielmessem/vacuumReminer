@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class _Y1NumericPayload:
     """Build the cqyi87 numeric request envelope observed from the Ecovacs app."""
 
+    _args: dict[str, Any]
+
     def _get_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "header": {
@@ -94,10 +96,7 @@ def y1_clean(action: CleanAction) -> Command:
         return Y1PauseClean()
     if action == CleanAction.RESUME:
         return Y1ResumeClean()
-    if action == CleanAction.STOP:
-        raise NotImplementedError("Y1 PRO stop command is not verified")
-    message = f"Unsupported Y1 PRO clean action: {action}"
-    raise ValueError(message)
+    raise NotImplementedError("Y1 PRO stop command is not verified")
 
 
 class Y1CleanArea(_Y1Execute):
