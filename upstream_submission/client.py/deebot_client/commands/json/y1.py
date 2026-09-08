@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from deebot_client.command import Command
 from deebot_client.commands.json.common import ExecuteCommand, JsonCommandMqttP2P
 from deebot_client.message import HandlingResult, HandlingState
 from deebot_client.models import CleanAction, CleanMode
 
 if TYPE_CHECKING:
+    from deebot_client.command import Command
     from deebot_client.event_bus import EventBus
 
 
@@ -56,7 +56,7 @@ class Y1StartClean(_Y1Execute):
         super().__init__({"cleanSwitch": True, "cleanMode": "smart"})
 
     @classmethod
-    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1StartClean:
+    def _create_from_mqtt(cls, _data: dict[str, Any]) -> Y1StartClean:
         return cls()
 
 
@@ -69,7 +69,7 @@ class Y1PauseClean(_Y1Execute):
         super().__init__({"pauseSwitch": True})
 
     @classmethod
-    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1PauseClean:
+    def _create_from_mqtt(cls, _data: dict[str, Any]) -> Y1PauseClean:
         return cls()
 
 
@@ -82,11 +82,11 @@ class Y1ResumeClean(_Y1Execute):
         super().__init__({"pauseSwitch": False})
 
     @classmethod
-    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1ResumeClean:
+    def _create_from_mqtt(cls, _data: dict[str, Any]) -> Y1ResumeClean:
         return cls()
 
 
-def Y1Clean(action: CleanAction) -> Command:
+def y1_clean(action: CleanAction) -> Command:
     """Create the fixed numeric command for a clean action."""
     if action == CleanAction.START:
         return Y1StartClean()
@@ -96,7 +96,8 @@ def Y1Clean(action: CleanAction) -> Command:
         return Y1ResumeClean()
     if action == CleanAction.STOP:
         raise NotImplementedError("Y1 PRO stop command is not verified")
-    raise ValueError(f"Unsupported Y1 PRO clean action: {action}")
+    message = f"Unsupported Y1 PRO clean action: {action}"
+    raise ValueError(message)
 
 
 class Y1CleanArea(_Y1Execute):
@@ -138,7 +139,7 @@ class Y1Charge(_Y1Execute):
         super().__init__({"chargeSwitch": True})
 
     @classmethod
-    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1Charge:
+    def _create_from_mqtt(cls, _data: dict[str, Any]) -> Y1Charge:
         return cls()
 
 
