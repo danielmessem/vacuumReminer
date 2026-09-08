@@ -44,7 +44,7 @@ def handle_y1_state_data(event_bus: EventBus, data: dict[str, Any]) -> HandlingR
                 and not isinstance(clean_area, bool)
                 else None,
                 # Captured Y1 cleanTime is minutes; deebot-client/HA expects sec.
-                time=int(round(float(clean_time) * 60))
+                time=round(float(clean_time) * 60)
                 if isinstance(clean_time, (int, float))
                 and not isinstance(clean_time, bool)
                 else None,
