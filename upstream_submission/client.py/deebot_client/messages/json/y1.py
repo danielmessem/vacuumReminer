@@ -40,7 +40,7 @@ def handle_y1_state_data(event_bus: EventBus, data: dict[str, Any]) -> HandlingR
                 and not isinstance(clean_area, bool)
                 else None,
                 # Captured Y1 cleanTime is minutes; deebot-client/HA expects sec.
-                time=round(float(clean_time) * 60)
+                time=int(round(float(clean_time) * 60))
                 if isinstance(clean_time, (int, float))
                 and not isinstance(clean_time, bool)
                 else None,
@@ -61,16 +61,19 @@ def handle_y1_state_data(event_bus: EventBus, data: dict[str, Any]) -> HandlingR
 
     status = data.get("status")
     if isinstance(status, str):
-        state = {
-            "smartclean": State.CLEANING,
-            "areaclean": State.CLEANING,
-            "gocharge": State.RETURNING,
-            # Do not infer DOCKED from idle without per-device cached charge
-            # context. A separate chargeStatus=true event is authoritative.
-            "idle": State.IDLE,
-        }.get(status.lower())
-        if state is not None:
-            event_bus.notify(StateEvent(state))
+        normalized = status.lower()
+        if normalized in {"smartclean", "areaclean"}:
+            event_bus.notify(StateEvent(State.CLEANING))
+            handled = True
+        elif normalized == "gocharge":
+            event_bus.notify(StateEvent(State.RETURNING))
+            handled = True
+        elif normalized == "idle" and charge_status is not True:
+            # Avoid emitting IDLE after DOCKED when both fields occur in the
+            # same multiplexed update. Cross-message charge caching is left out
+            # of PR1 because module-global cache would be unsafe for multi-device
+            # processes; an explicit chargeStatus=true update is authoritative.
+            event_bus.notify(StateEvent(State.IDLE))
             handled = True
 
     return HandlingResult.success() if handled else HandlingResult.analyse()
