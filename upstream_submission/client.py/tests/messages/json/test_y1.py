@@ -52,6 +52,12 @@ def test_y1_idle_does_not_require_global_charge_cache() -> None:
     event_bus.notify.assert_called_once_with(StateEvent(State.IDLE))
 
 
+def test_y1_idle_does_not_override_same_payload_docked_state() -> None:
+    event_bus = Mock(spec_set=EventBus)
+    handle_y1_state_data(event_bus, {"status": "idle", "chargeStatus": True})
+    event_bus.notify.assert_called_once_with(StateEvent(State.DOCKED))
+
+
 def test_y1_clean_stats_convert_minutes_to_seconds() -> None:
     event_bus = Mock(spec_set=EventBus)
     handle_y1_state_data(event_bus, {"cleanArea": 12, "cleanTime": 7})
