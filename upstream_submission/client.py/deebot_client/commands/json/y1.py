@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class _Y1NumericPayload:
     """Build the cqyi87 numeric request envelope observed from the Ecovacs app."""
 
-    _args: dict[str, Any]
+    _args: dict[str, Any] | list[Any]
 
     def _get_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
