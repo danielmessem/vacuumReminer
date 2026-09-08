@@ -22,6 +22,7 @@ FILES = (
     "deebot_client/hardware/cqyi87.py",
     "tests/commands/json/test_y1.py",
     "tests/messages/json/test_y1.py",
+    "tests/test_y1_hardware.py",
 )
 
 
