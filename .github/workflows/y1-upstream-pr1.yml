@@ -1,0 +1,70 @@
+name: Y1 PRO upstream PR1 validation
+
+on:
+  push:
+    branches:
+      - y1-pro-clean-package
+    paths:
+      - "upstream_submission/client.py/**"
+      - ".github/workflows/y1-upstream-pr1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Y1 staging repository
+        uses: actions/checkout@v4
+        with:
+          path: staging
+
+      - name: Check out current client.py dev
+        uses: actions/checkout@v4
+        with:
+          repository: DeebotUniverse/client.py
+          ref: dev
+          path: upstream
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Overlay staged cqyi87 PR1
+        run: python staging/upstream_submission/client.py/apply_to_upstream.py upstream
+
+      - name: Install upstream project and test/lint dependencies
+        working-directory: upstream
+        run: uv sync --locked --group lint --group test
+
+      - name: Ruff check staged Python
+        working-directory: upstream
+        run: |
+          uv run ruff check \
+            deebot_client/commands/json/y1.py \
+            deebot_client/messages/json/y1.py \
+            deebot_client/hardware/cqyi87.py \
+            tests/commands/json/test_y1.py \
+            tests/messages/json/test_y1.py
+          uv run ruff format --check \
+            deebot_client/commands/json/y1.py \
+            deebot_client/messages/json/y1.py \
+            deebot_client/hardware/cqyi87.py \
+            tests/commands/json/test_y1.py \
+            tests/messages/json/test_y1.py
+
+      - name: Mypy staged library code
+        working-directory: upstream
+        run: |
+          uv run mypy \
+            deebot_client/commands/json/y1.py \
+            deebot_client/messages/json/y1.py \
+            deebot_client/hardware/cqyi87.py
+
+      - name: Run targeted Y1 tests
+        working-directory: upstream
+        run: uv run pytest tests/commands/json/test_y1.py tests/messages/json/test_y1.py -v
