@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from deebot_client.command import Command
 from deebot_client.commands.json.common import ExecuteCommand, JsonCommandMqttP2P
 from deebot_client.message import HandlingResult, HandlingState
 from deebot_client.models import CleanAction, CleanMode
@@ -39,45 +40,63 @@ class _Y1NumericPayload:
 
 
 class _Y1Execute(_Y1NumericPayload, ExecuteCommand, JsonCommandMqttP2P):
-    """Base for Y1 execute commands which may receive MQTT P2P acknowledgements."""
-
-    @classmethod
-    def create_from_mqtt(cls, payload: str | bytes | bytearray):
-        return cls._create_from_payload(payload)
-
-    @classmethod
-    def _create_from_payload(cls, payload: str | bytes | bytearray):
-        raise NotImplementedError
+    """Base for fixed-name Y1 commands with MQTT P2P acknowledgements."""
 
     def _handle_mqtt_p2p(self, event_bus: EventBus, response: dict[str, Any]) -> None:
         body = response.get("body", response)
         self._handle_body(event_bus, body if isinstance(body, dict) else {})
 
 
-class Y1Clean(_Y1Execute):
-    """Start, pause or resume a Y1 PRO cleaning task."""
+class Y1StartClean(_Y1Execute):
+    """Start smart cleaning."""
 
     NAME = "40001"
 
-    def __init__(self, action: CleanAction) -> None:
-        if action == CleanAction.START:
-            self.NAME = "40001"
-            args = {"cleanSwitch": True, "cleanMode": "smart"}
-        elif action == CleanAction.PAUSE:
-            self.NAME = "40009"
-            args = {"pauseSwitch": True}
-        elif action == CleanAction.RESUME:
-            self.NAME = "40011"
-            args = {"pauseSwitch": False}
-        elif action == CleanAction.STOP:
-            raise NotImplementedError("Y1 PRO stop command is not verified")
-        else:
-            raise ValueError(f"Unsupported Y1 PRO clean action: {action}")
-        super().__init__(args)
+    def __init__(self) -> None:
+        super().__init__({"cleanSwitch": True, "cleanMode": "smart"})
 
     @classmethod
-    def _create_from_payload(cls, payload: str | bytes | bytearray):
-        raise NotImplementedError("Y1 clean commands are created from CleanAction")
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1StartClean:
+        return cls()
+
+
+class Y1PauseClean(_Y1Execute):
+    """Pause the current cleaning task."""
+
+    NAME = "40009"
+
+    def __init__(self) -> None:
+        super().__init__({"pauseSwitch": True})
+
+    @classmethod
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1PauseClean:
+        return cls()
+
+
+class Y1ResumeClean(_Y1Execute):
+    """Resume a paused cleaning task."""
+
+    NAME = "40011"
+
+    def __init__(self) -> None:
+        super().__init__({"pauseSwitch": False})
+
+    @classmethod
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1ResumeClean:
+        return cls()
+
+
+def Y1Clean(action: CleanAction) -> Command:
+    """Create the fixed numeric command for a clean action."""
+    if action == CleanAction.START:
+        return Y1StartClean()
+    if action == CleanAction.PAUSE:
+        return Y1PauseClean()
+    if action == CleanAction.RESUME:
+        return Y1ResumeClean()
+    if action == CleanAction.STOP:
+        raise NotImplementedError("Y1 PRO stop command is not verified")
+    raise ValueError(f"Unsupported Y1 PRO clean action: {action}")
 
 
 class Y1CleanArea(_Y1Execute):
@@ -102,8 +121,12 @@ class Y1CleanArea(_Y1Execute):
         )
 
     @classmethod
-    def _create_from_payload(cls, payload: str | bytes | bytearray):
-        raise NotImplementedError("Y1 area commands are created from room IDs")
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1CleanArea:
+        values = data.get("cleanValues", [])
+        return cls(
+            CleanMode.SPOT_AREA,
+            values if isinstance(values, list) else [],
+        )
 
 
 class Y1Charge(_Y1Execute):
@@ -115,7 +138,7 @@ class Y1Charge(_Y1Execute):
         super().__init__({"chargeSwitch": True})
 
     @classmethod
-    def _create_from_payload(cls, payload: str | bytes | bytearray):
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1Charge:
         return cls()
 
 
@@ -132,9 +155,8 @@ class Y1FieldQuery(_Y1NumericPayload, JsonCommandMqttP2P):
         self._is_available_check = is_available_check
 
     @classmethod
-    def create_from_mqtt(cls, payload: str | bytes | bytearray):
-        data = orjson.loads(payload).get("body", {}).get("data", {})
-        fields = data.get("fields", []) if isinstance(data, dict) else []
+    def _create_from_mqtt(cls, data: dict[str, Any]) -> Y1FieldQuery:
+        fields = data.get("fields", [])
         return cls(fields if isinstance(fields, list) else [])
 
     def _handle_response(
