@@ -23,8 +23,10 @@ from deebot_client.events import (
     AvailabilityEvent,
     BatteryEvent,
     CustomCommandEvent,
+    ErrorEvent,
     LifeSpan,
     LifeSpanEvent,
+    NetworkInfoEvent,
     ReportStatsEvent,
     StateEvent,
     StatsEvent,
@@ -37,6 +39,11 @@ def _unsupported_life_span_reset(component: LifeSpan) -> NoReturn:
     """Refuse to send a consumable reset until its Y1 protocol is verified."""
     message = f"Y1 PRO consumable reset is not mapped: {component}"
     raise NotImplementedError(message)
+
+
+def _unsupported_play_sound() -> NoReturn:
+    """Refuse to send an unverified Y1 sound command."""
+    raise NotImplementedError("Y1 PRO play-sound command is not mapped")
 
 
 def get_device_info() -> StaticDeviceInfo:
@@ -59,10 +66,7 @@ def get_device_info() -> StaticDeviceInfo:
             custom=CapabilityCustomCommand(
                 event=CustomCommandEvent, get=[], set=CustomCommand
             ),
-            # These base Capabilities fields are currently non-optional in
-            # client.py, although several local/legacy profiles use None for
-            # unsupported features. Keep unsupported Y1 features inert in PR1.
-            error=None,
+            error=CapabilityEvent(ErrorEvent, []),
             fan_speed=None,
             life_span=CapabilityLifeSpan(
                 event=LifeSpanEvent,
@@ -71,8 +75,8 @@ def get_device_info() -> StaticDeviceInfo:
                 types=(),
             ),
             map=None,
-            network=None,
-            play_sound=None,
+            network=CapabilityEvent(NetworkInfoEvent, []),
+            play_sound=CapabilityExecute(_unsupported_play_sound),
             settings=CapabilitySettings(),
             state=CapabilityEvent(
                 StateEvent, [Y1FieldQuery(["status", "chargeStatus"])]
