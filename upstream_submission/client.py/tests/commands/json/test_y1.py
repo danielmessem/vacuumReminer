@@ -8,10 +8,12 @@ from deebot_client.models import CleanAction, CleanMode
 
 def _body_data(command):
     payload = command._get_payload()
-    assert payload["header"]["channel"] == "Android"
-    assert payload["header"]["m"] == "request"
-    assert payload["header"]["pri"] == 2
-    assert payload["header"]["ver"] == "0.0.22"
+    assert payload["header"]["channel"] == "rop"
+    assert payload["header"]["m"] == "cloudctl"
+    assert payload["header"]["pri"] == 3
+    assert payload["header"]["ver"] == "0.0.1"
+    assert isinstance(payload["header"]["reqid"], str)
+    assert isinstance(payload["header"]["ts"], str)
     return payload["body"]["data"]
 
 
